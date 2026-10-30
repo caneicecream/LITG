@@ -7,7 +7,7 @@
 | **Domain** (pricing + optimization) | `src/domain/` | Pure TypeScript with no I/O or framework imports. Calculates costs, checks promotion eligibility and hard constraints, enumerates and ranks configurations, computes savings. Fully deterministic, so the same inputs always give the same output. |
 | **Data** | `src/data/` | Catalog (structure), reference estimates, the illustrative dataset, the user's local store, and a `PriceSource` registry that assembles `PriceData` for the optimizer. |
 | **App** | `src/app/`, `src/components/` | Next.js pages and API routes. The UI only collects a `TripRequest` and renders an `OptimizationResult`; it does no pricing of its own. |
-| **AI** (future) | n/a | Will translate natural language into a `TripRequest` (validated by `src/domain/schema.ts`), call the same optimizer, and explain its structured result. It must never compute prices itself. |
+| **AI** | `src/ai/` | Interprets natural language into a reviewable patch to the `TripRequest`, and explains the optimizer's result from a facts digest. It never computes or states a price the optimizer didn't produce. See *AI-assisted planning*. |
 
 ### Why this stack
 
@@ -167,9 +167,48 @@ Results (median, same machine, `npm run bench`):
 
 What remains in the wide case is enumerating, constraint-checking and bounding 450k configurations. `addDays` results are memoized because date construction dominated the profile.
 
+## AI-assisted planning (`src/ai/`)
+
+**Principle: AI interprets the vacation; the deterministic optimizer calculates it.**
+
+```
+user message ─▶ provider.interpret ─▶ proposalSchema (strict zod) ─▶ applyPatch ─▶ parseTripRequest
+                                                                       │ (diff, adjustments, warnings, errors)
+                                                     reviewable proposal ◀┘
+apply ─▶ optimize(request) [+ optimize(variant) for each comparison] ─▶ OptimizationResult (stored)
+      ─▶ buildDigest(result, previous run, variants) ─▶ numbered facts
+      ─▶ provider.explain(facts) ─▶ explanationSchema ─▶ groundExplanation ─▶ AI text  |  deterministic facts
+```
+
+- **The model's output is a patch, not a request.** `proposalSchema` contains only request fields, all nullable (null = unchanged). Relative operations ("+1 night", "arrive 1 day earlier") are resolved in code, so the model never does date arithmetic. Strict objects reject extra keys, so prices or totals can't be smuggled in.
+- **`applyPatch` is deterministic.** It changes only the named fields, so unrelated preferences survive every refinement. It also:
+  - keeps the window and baseline consistent, with every consequential change listed as an "adjustment"
+  - validates resort and room ids against the catalog
+  - validates the result with the planner's own `parseTripRequest`
+  - applies **money values only if the user stated that amount**; otherwise it reports "not applied"
+- **Hard vs soft.** Requirements map to filtering fields: date window, nights range, allowed resorts/tiers, accepted tickets, dining require/exclude, hard limit. Preferences map to ranking fields: the preferred plan, preferred resorts, budget target, objective and weights. `describeRequest` shows both, plus which sections are still defaults the user hasn't confirmed.
+- **Review before apply.** Proposals are stored as `pending` (or `invalid`, with reasons) and applied only on request, unless the conversation's auto-apply setting is on. Each applied run stores its request snapshot, so any earlier decision can be restored.
+- **Facts digest (`digest.ts`).** Every statement the assistant may make about money is generated from the `OptimizationResult`, using the optimizer's own formatting:
+  - award winners and their reasons
+  - the baseline and the top-ranked options
+  - the cost breakdown, offers (applied and possible), assumptions and notices
+  - exclusions, nearby arrival dates
+  - changes vs the previous run, and comparison variants
+
+  Differences the user may ask about are precomputed, so the model never needs to do arithmetic.
+- **Grounding (`grounding.ts`).** Every `$` amount, percentage and score in AI text must appear in the facts (or be the user's own number), and every citation must exist; otherwise the AI text is replaced by a deterministic explanation built from the facts, with the reason shown. The interpretation reply is checked the same way. Displayed numbers in the results panel always come from the stored `OptimizationResult`, never from AI text.
+- **Providers (`providers/`).** `AiProvider` has two methods, `interpret` and `explain`, both returning raw output that the service validates.
+  - `AnthropicProvider` uses the official `@anthropic-ai/sdk` (`beta.messages.parse` with `betaZodOutputFormat`). It uses adaptive thinking with explicit effort (`medium` to interpret, `low` to explain), a cached system prompt, and `fallbacks: "default"` (beta `server-side-fallback-2026-07-01`) for refusals.
+  - Typed SDK errors map to `rate_limited`, `unavailable`, `timeout`, `auth`, `bad_request`, `refused` and `invalid_output`. The SDK retries 429/5xx twice.
+  - `RulesProvider` is the keyless basic mode. A mock provider is used in tests.
+  - If the configured provider fails or returns unusable output, that message is handled by basic mode with a visible notice. The request is never changed by a failed call.
+  - Keys live only in server environment variables (`providers/config.ts`).
+- **Persistence.** Conversations live in the same local JSON store as prices and trips, holding the request, confirmed sections, messages (proposals, runs, explanations with their facts) and the latest full result. No new infrastructure is needed; PostgreSQL remains a Milestone 4 decision.
+- **Adding a vendor.** Implement `AiProvider` (reuse `prompts.ts` and the zod schemas for structured output) and add a case in `providers/config.ts`.
+
 ## Extending
 
 - **New data source:** implement `PriceSource` in `src/data/sources.ts` (e.g. an authorized partner feed) and tag its output with honest provenance. The resolver handles precedence. Nothing in the optimizer changes.
 - **New resort or room:** add it to `src/data/catalog.ts`, and to the illustrative generator if demo coverage is wanted.
-- **AI assistant:** produce a `TripRequest` (schema already strict), call `optimize()`, and explain `awards[].explanation`, `lines[].calculation` and `assumptions`. Those are the facts the assistant may state.
+- **AI provider:** see *AI-assisted planning* above.
 - **Monitoring:** saved trips store run snapshots; price entries keep their observation history; booked quotes carry payment and cancellation terms, and savings are already netted against them. Next steps are a scheduled job that re-runs saved requests and change detection over history.

@@ -74,11 +74,28 @@ Also changed:
 1. Enter real quotes for an actual trip and use them to grow the scenario regression suite.
 2. Installments in the forms; bulk entry for room rates and point charts.
 3. Per-entry tax jurisdiction override for generic off-property slots.
-4. Milestone 3 (AI-assisted planning) on top of the existing `TripRequest` contract.
+4. ~~Milestone 3 (AI-assisted planning)~~ done; see below.
 
-## Milestone 3: AI-assisted planning
+## Milestone 3: AI-assisted planning (done, 2026-10-30)
 
-A natural-language request becomes a `TripRequest` (validated by the existing schema). It runs through `optimize()`, and an explanation is grounded only in `awards`, `lines` and `assumptions`. Conversational refinements ("what if 7 nights?") edit the request and re-run. Provider-agnostic through a small interface, with keys from env vars and graceful degradation without them.
+| Item | Status | Notes |
+| --- | --- | --- |
+| Conversational planning interface | ✅ | Assistant page: chat beside the plan and the existing results panel; new, continue and delete conversations; handoff from the planner. |
+| Natural language → validated `TripRequest` | ✅ | Strict proposal schema → deterministic `applyPatch` → planner schema. Hard vs soft mapping, evidence quotes, clarifications, unsupported items, unstated money rejected. |
+| Always use the optimizer | ✅ | Proposals change only the request; results come from `optimize()` (plus comparison variants). AI output has no price fields, and extra keys are rejected. |
+| Grounded explanations | ✅ | Facts digest with precomputed deltas; every figure in AI text is checked; a deterministic fallback is shown with the reason. |
+| Interactive refinement | ✅ | Relative changes (nights, arrival), resort/ticket/dining/budget/DVC changes, comparisons; unrelated choices preserved (tested). Edit in the form, restore earlier versions. |
+| Provider architecture | ✅ | `AiProvider` interface; Claude via the official SDK (structured outputs, refusal fallbacks, typed error mapping); keyless basic mode; mock for tests; per-message fallback to basic mode on provider failure. |
+| Conversation persistence | ✅ | Local JSON store: request, confirmed sections, messages, run snapshots, latest result. |
+| Works without an API key | ✅ | Planner unaffected; assistant in basic mode. |
+| Tests | ✅ | 43 AI tests (165 total) with mocked providers. |
+
+**Deferred or limited**
+
+- *Live Claude verification*: the Anthropic provider is tested against a mocked SDK client only. No API key was available in the build environment.
+- *Additional vendors* (e.g. OpenAI): the interface and shared prompts/schemas are in place, but only the Claude provider is implemented.
+- *Streaming responses*: requests are short structured calls, so the UI shows a progress state instead of streamed text.
+- *Basic-mode coverage*: the keyless interpreter understands common phrasings only, and asks or reports anything else.
 
 ## Milestone 4: price monitoring
 

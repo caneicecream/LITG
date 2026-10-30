@@ -169,6 +169,21 @@ export function Planner() {
               </button>
             </div>
             {savedMsg && <div className="small save-pos">{savedMsg}</div>}
+            <button
+              type="button"
+              className="link"
+              style={{ alignSelf: "flex-start" }}
+              onClick={async () => {
+                const parsed = parseTripRequest(request);
+                if (!parsed.ok) return setErrors(parsed.errors);
+                const res = await fetch("/api/conversations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request }) });
+                const body = await res.json();
+                if (!res.ok) return setErrors(body.errors ?? ["Could not start a conversation"]);
+                router.push(`/assistant?c=${body.conversation.id}`);
+              }}
+            >
+              Ask the assistant about this plan →
+            </button>
           </div>
         </form>
       </aside>

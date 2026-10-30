@@ -13,6 +13,7 @@ import type {
   TripRequest,
 } from "@/domain/types";
 import type { Cents } from "@/domain/money";
+import type { Conversation } from "@/ai/types";
 import { applyRecheck, type RecheckInput } from "./observations";
 
 /**
@@ -59,6 +60,7 @@ interface StoreFile {
   version: 1;
   prices: UserPriceEntry[];
   trips: SavedTrip[];
+  conversations: Conversation[];
 }
 
 const MAX_RUNS_PER_TRIP = 50;
@@ -72,9 +74,9 @@ async function read(): Promise<StoreFile> {
   try {
     const raw = await fs.readFile(/*turbopackIgnore: true*/ storePath(), "utf8");
     const parsed = JSON.parse(raw) as StoreFile;
-    return { version: 1, prices: (parsed.prices ?? []).map(migrateEntry), trips: parsed.trips ?? [] };
+    return { version: 1, prices: (parsed.prices ?? []).map(migrateEntry), trips: parsed.trips ?? [], conversations: parsed.conversations ?? [] };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, prices: [], trips: [] };
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, prices: [], trips: [], conversations: [] };
     throw err;
   }
 }
@@ -178,5 +180,42 @@ export function deleteTrip(id: string): Promise<boolean> {
     const before = d.trips.length;
     d.trips = d.trips.filter((t) => t.id !== id);
     return d.trips.length < before;
+  });
+}
+
+// ─────────────────────────────── Planning conversations ───────────────────────────────
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+  messageCount: number;
+}
+
+export async function listConversations(): Promise<ConversationSummary[]> {
+  return (await read()).conversations
+    .map((c) => ({ id: c.id, title: c.title, createdAt: c.createdAt, updatedAt: c.updatedAt, messageCount: c.messages.length }))
+    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+}
+
+export async function getConversation(id: string): Promise<Conversation | undefined> {
+  return (await read()).conversations.find((c) => c.id === id);
+}
+
+export function saveConversation(conv: Conversation): Promise<Conversation> {
+  return mutate((d) => {
+    const i = d.conversations.findIndex((c) => c.id === conv.id);
+    if (i >= 0) d.conversations[i] = conv;
+    else d.conversations.push(conv);
+    return conv;
+  });
+}
+
+export function deleteConversation(id: string): Promise<boolean> {
+  return mutate((d) => {
+    const before = d.conversations.length;
+    d.conversations = d.conversations.filter((c) => c.id !== id);
+    return d.conversations.length < before;
   });
 }

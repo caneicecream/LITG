@@ -67,10 +67,11 @@ export function normalizeName(s: string): string {
 export function matchByName<T extends { id: string; name: string }>(
   text: string,
   items: readonly T[],
+  opts: { matchIds?: boolean } = {},
 ): { item: T } | { error: string } {
   const n = normalizeName(text);
   if (!n) return { error: "is empty" };
-  const exact = items.filter((x) => x.id === text.trim() || normalizeName(x.name) === n);
+  const exact = items.filter((x) => ((opts.matchIds ?? true) && x.id === text.trim()) || normalizeName(x.name) === n);
   if (exact.length === 1) return { item: exact[0]! };
   const partial = items.filter((x) => normalizeName(x.name).includes(n));
   if (partial.length === 1) return { item: partial[0]! };
