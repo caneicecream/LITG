@@ -274,3 +274,30 @@ button.suggest { font-size: 11px; font-weight: 500; padding: 3px 8px; border-rad
 .chat-head select { min-width: 0; max-width: 100%; text-overflow: ellipsis; }
 .suggestions { display: flex; gap: 4px; overflow-x: auto; padding-bottom: 2px; }
 .suggestions button { flex: none; }
+
+/* ── Monitoring ──────────────────────────────────────────── */
+.nav { flex-wrap: wrap; }
+.badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 13px; }
+.kv > dt { color: var(--muted); }
+.kv > dd { margin: 0; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; }
+.tile { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--surface); }
+.tile .label { font-size: 12px; color: var(--muted); }
+.tile .value { font-size: 20px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile .sub { font-size: 12px; color: var(--muted); }
+.event { border-left: 3px solid var(--border); padding: 4px 10px; }
+.event-important { border-left-color: var(--accent); }
+.event-notice { border-left-color: var(--warn); }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart .tip { position: absolute; pointer-events: none; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; box-shadow: var(--shadow); padding: 6px 8px; font-size: 12px; white-space: nowrap; transform: translate(-50%, calc(-100% - 10px)); }
+.verdict { border-radius: var(--radius); padding: 10px 12px; border: 1px solid var(--border); }
+.verdict-worth_considering { background: var(--good-soft); }
+.verdict-not_worth_it { background: var(--surface-2); }
+.verdict-review { background: var(--warn-soft); }
+.verdict-unknown { background: var(--warn-soft); border-color: var(--warn); }
+.scroll-x { overflow-x: auto; }
+.unread { font-weight: 600; }
+.split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 700px) { .split { grid-template-columns: 1fr; } }

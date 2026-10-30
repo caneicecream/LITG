@@ -2,7 +2,7 @@
 
 ## Milestone 0: assessment (done, 2026-10-30)
 
-**Starting point:** an empty repository (no commits). Node 22, npm, Python 3.13 and PostgreSQL 16 were available. We started from scratch with the brief's suggested stack, simplified to one Next.js app with no database server.
+**Starting point:** an empty repository (no commits). Node 22, npm, Python 3.13 and PostgreSQL 16 were available. We started from scratch with the brief's suggested stack, simplified to one Next.js app with no database server (PostgreSQL was added, as an option, in Milestone 4).
 
 **Pricing data access: the main risk.**
 
@@ -75,6 +75,7 @@ Also changed:
 2. Installments in the forms; bulk entry for room rates and point charts.
 3. Per-entry tax jurisdiction override for generic off-property slots.
 4. ~~Milestone 3 (AI-assisted planning)~~ done; see below.
+5. ~~Milestone 4 (historical pricing and monitoring)~~ done; see below.
 
 ## Milestone 3: AI-assisted planning (done, 2026-10-30)
 
@@ -97,9 +98,29 @@ Also changed:
 - *Streaming responses*: requests are short structured calls, so the UI shows a progress state instead of streamed text.
 - *Basic-mode coverage*: the keyless interpreter understands common phrasings only, and asks or reports anything else.
 
-## Milestone 4: price monitoring
+## Milestone 4: historical pricing and vacation monitoring (done, 2026-10-30)
 
-A Postgres store (price observations with history), scheduled re-runs of saved trips, change detection versus the last snapshot, switching-cost-aware "is rebooking worth it", and notifications. Never any automatic booking changes.
+| Item | Status | Notes |
+| --- | --- | --- |
+| PostgreSQL persistence | ✅ | Store facade with JSON (default) and PostgreSQL backends selected by `DATABASE_URL`. `pg`, versioned and checksummed migrations, `docker-compose.yml`, clear 503s when the database is down or behind. The domain layer is unchanged. |
+| Safe import from JSON | ✅ | `npm run db:import-json` (with `--dry-run`): one transaction, idempotent, never modifies the file, never overwrites rows, reports differences, keeps entries that fail today's validation (with a warning). History becomes observations. |
+| Historical observations | ✅ | Append-only (trigger-enforced). Each records source, URL, observed date, recorded time, full configuration, tax treatment, payment/cancellation terms, status, assumptions and a full snapshot. Identical content can't be recorded twice; re-reading a quote is not an observation. |
+| Saved-vacation monitoring | ✅ | Opt-in per trip: pause/resume; preferences; latest and previous price, $/% change, trend, last observation, stale flag; "Check now"; source and status of every observation. |
+| Scheduled monitoring | ✅ | Cron script, secret-protected endpoint, or in-app timer. Due monitors are claimed with `SKIP LOCKED` (no double runs). Checks are labelled as re-evaluations with stored prices, never as live price checks. Adapter interface for authorized sources (none registered). |
+| Change detection | ✅ | Increases/decreases with $ and %, thresholds, confirmations, status changes, configuration changes, recalculations (engine/catalog versions), promotions applied/ended/possible, stale, missing, newly available, new comparable quotes, cheaper alternatives. Only equivalent configurations are compared. |
+| Switching-cost analysis | ✅ | Original/new cost, cancellation cost, fees and other non-refundable amounts, ticket/dining change costs, net difference, due now, remaining balances, refund. Unknown inputs mean "no reliable recommendation"; never a saving from totals alone. Editable calculator. |
+| Notifications | ✅ | In-app (bell, page, read state). Optional SMTP email, global and per monitor. One digest per check; dedupe keys mean a situation never notifies twice. Email failures are recorded and never lose the notification. |
+| History visualization | ✅ | One SVG chart per equivalent series (hover details, stale points hollow, table view). Different series are never joined, and a single observation says why there's no trend. |
+| AI assistant | ✅ | Price-history and switching facts in the digest, grounded like every other figure. Basic mode treats history questions as explanations. Works from re-check history in JSON mode. |
+| Tests | ✅ | 240 total: pure financial/detection tests plus PostgreSQL suites (`TEST_DATABASE_URL`). |
+
+**Deferred or limited**
+
+- *Live prices*: no authorized source exists for this personal project (see Milestone 0). Monitoring is only as current as your re-checks, and the UI says so everywhere.
+- *Tracked configuration*: the trip's preferred plan only. Tracking several configurations per trip is a natural extension of the same fingerprint model.
+- *Modify-in-place rebooking*: the switching analysis assumes cancel-and-rebook and says so.
+- *Email*: plain-text SMTP only; no unsubscribe links or delivery retries (a failed email is shown on the notification).
+- *Imported history*: older JSON observations kept only price, date, status and source, so other details are assumed unchanged (stated on each record).
 
 ## Milestone 5: itinerary optimization
 

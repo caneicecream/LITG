@@ -36,7 +36,7 @@ Production build:
 npm run build && npm start
 ```
 
-No API keys or environment variables are required. The app works offline with the illustrative dataset and anything you enter yourself.
+No API keys, database or environment variables are required. The app works offline with the illustrative dataset and anything you enter yourself, stored in a local JSON file. Price history and monitoring are optional and need PostgreSQL (see *Database and monitoring*).
 
 ## Working with real prices
 
@@ -94,26 +94,112 @@ You can also edit the plan directly ("Edit plan" or "Open in full planner"), res
 
 **Without an API key** the assistant runs in **basic mode**. A small deterministic interpreter understands phrases like the ones above, and explanations are the optimizer's facts. The planner itself never needs a key.
 
+## Database and monitoring
+
+PostgreSQL adds durable **price history** and **saved-vacation monitoring**. Without it, everything else works as before.
+
+### Setup
+
+```bash
+docker compose up -d db                                   # or use any PostgreSQL 14+
+echo 'DATABASE_URL=postgresql://dvo:dvo@localhost:5432/dvo' >> .env.local
+npm run db:migrate                                        # apply migrations (also: -- --status)
+npm run db:import-json -- --dry-run                       # preview copying your JSON data
+npm run db:import-json                                    # copy it (safe to re-run)
+npm run dev
+```
+
+- **Migrations** are versioned and checksummed. The app never migrates on its own: if the schema is behind, it says so and asks you to run `npm run db:migrate`.
+- **The JSON import** only reads your JSON file (it is never modified or deleted). Re-running it adds nothing twice and never overwrites existing rows; differences are reported. Each entry's re-check history becomes historical observations.
+- **If the database is down**, pages show a clear "database unavailable" message and API calls return 503. Nothing crashes, and no data is lost.
+
+While `DATABASE_URL` is set, all data (prices, trips, conversations) lives in PostgreSQL. Unset it to go back to the JSON file.
+
+### Price history
+
+Every time you add or re-check a price, an immutable **observation** is recorded with its source, URL, observation date, recording time, the full configuration (resort, room, dates, party, booking method, tickets, dining), tax treatment, payment and cancellation terms, status and assumptions. Observations are never changed or deleted (the database enforces it). Deleting a price entry only hides it. Re-checking a quote with exactly the same details records nothing: reading the same old quote again is not a new observation.
+
+### Monitoring a trip
+
+On **Saved trips**, press **Monitor** on a trip (monitoring is opt-in per trip). The monitor page shows:
+
+- the tracked plan (the trip's preferred plan) with the **latest and previous observed price**, the change in $ and %, the trend, when it was last observed, and a **stale** flag;
+- a **price-history chart** per *equivalent* configuration. Different configurations, all-in vs pre-tax totals, and your estimates vs quotes are never joined into one line. With one observation it says a trend needs two;
+- every observation with its source and status;
+- **what changed** at the last check, and a check log;
+- **Is switching worth it?** (see below);
+- preferences: how often (daily, weekly, or only when you ask), staleness, notification thresholds ($ or %), the smallest net benefit worth switching for, known switching fees and other non-refundable amounts, which events notify, and email.
+
+**"Check now" is not a live price check.** A check re-evaluates the saved trip with the prices stored in the app. New prices come only from your quotes and re-checks ("Record a new observation" takes you there). No automated source is connected: Disney publishes no pricing API, and this project does not scrape Disney's site.
+
+**Change detection** tells apart:
+- a price change (new price data for the same configuration, with $ and %);
+- a confirmation (same price, newer source);
+- a status change;
+- a change to the trip itself;
+- a recalculation (rules or tax tables changed, "not a change in Disney's price");
+- promotions applied, ended or possibly available;
+- stale prices, missing prices, and new quotes for the same configuration;
+- a cheaper like-for-like option.
+
+### Is switching worth it?
+
+A lower quote is not a saving until the cost of switching is subtracted. For a reservation you hold (a quote marked "a reservation I already hold", with its payment and cancellation terms), the analysis shows:
+
+| | |
+| --- | --- |
+| Original cost / new cost | Your reservation's total and the alternative's |
+| Price difference | Shown, but never called a saving |
+| Cancellation cost today | From your recorded terms: free-cancellation date, penalty tiers, refundability, amount paid |
+| Switching cost | Cancellation + known fees + other non-refundable amounts + ticket/dining change costs |
+| Net difference | Price difference − switching cost |
+| Due now / remaining balance | The new deposit plus fees; what's left to pay on the new booking; refund expected; what's left if you keep yours |
+
+If any part of the switching cost is unknown (no terms recorded, refundability unknown, after the free-cancellation date with no recorded penalty, unknown ticket/dining change cost), the verdict is **"No reliable recommendation can be made"**. If a price is stale, an estimate, or the alternative isn't the same trip, the verdict is **Review**. The app never books, changes or cancels anything. You can edit every figure in the calculator.
+
+### Scheduling and notifications
+
+Choose one way to run checks on schedule:
+
+- `npm run monitor` from cron (e.g. hourly; it runs monitors that are due). Add `-- --all` to check every enabled monitor now.
+- `POST /api/monitoring/run` with header `x-monitor-secret: $MONITOR_CRON_SECRET`, from an external scheduler.
+- `MONITOR_SCHEDULER=on`: the app itself looks for due monitors every 15 minutes while it runs.
+
+Notifications appear in the app (🔔 and **Notifications**). There is one digest per check, and the same situation is never notified twice. Email is optional: set `SMTP_URL` on the server, then enable it under **Monitoring → Notifications** and per monitor.
+
+### Asking the assistant about history
+
+The assistant can answer "what's the lowest price we've recorded?", "has the price dropped?" or "is it worth switching?" from recorded observations and the same switching arithmetic. Its answers pass the same figure checks as before, so it can't invent a price drop or call a price difference a saving. In JSON mode it uses each entry's re-check history.
+
 ### Configuration
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `DVO_STORE_PATH` | `./data/local-store.json` | Where your entered prices, their history, saved trips and conversations are stored (git-ignored). |
+| `DVO_STORE_PATH` | `./data/local-store.json` | JSON-mode file for your prices, their history, saved trips and conversations (git-ignored). Also the default source for `db:import-json`. |
 | `ANTHROPIC_API_KEY` | none | Enables the AI assistant (Claude). Server-side only, never sent to the browser. |
 | `AI_PROVIDER` | `anthropic` if a key is set, else `rules` | Set `rules` to force basic mode. |
 | `AI_MODEL` | `claude-opus-5-5` | Model used by the assistant. |
 | `AI_EFFORT` | `medium` | Interpretation effort (`low`…`max`); explanations use `low`. |
 | `AI_FALLBACKS` | on | Server-side refusal fallbacks; set `off` to disable. |
+| `DATABASE_URL` | none | PostgreSQL connection string. Enables price history and monitoring; all data then lives in the database. |
+| `MONITOR_SCHEDULER` | off | `on` runs due monitor checks inside the app every 15 minutes. |
+| `MONITOR_CRON_SECRET` | none | Enables `POST /api/monitoring/run` for an external scheduler (header `x-monitor-secret`). |
+| `SMTP_URL` | none | SMTP connection URL for optional email notifications (server-side only). |
+| `NOTIFY_EMAIL_FROM` | `no-reply@localhost` | Sender address for notification emails. |
+| `TEST_DATABASE_URL` | none | Runs the PostgreSQL test suites (each test file uses its own schema). |
 
 Copy `.env.example` to `.env.local` and restart the app after changing these.
 
 ## Tests and benchmarks
 
 ```bash
-npm test             # 165 unit, scenario, property and AI tests (Vitest; AI providers are mocked)
+npm test             # unit, scenario, property, AI and monitoring tests (Vitest; AI providers are mocked)
+TEST_DATABASE_URL=postgresql://dvo:dvo@localhost:5432/dvo_test npm test   # also the PostgreSQL suites
 npm run typecheck    # TypeScript, strict mode
 npm run bench        # optimizer timings for default, wide and widest searches
 ```
+
+240 tests in total: 214 run without a database, and the 26 PostgreSQL tests run when `TEST_DATABASE_URL` is set.
 
 The tests cover:
 
@@ -123,6 +209,17 @@ The tests cover:
 - **Importers:** the paste and bulk importers.
 - **Scenarios:** a known-scenario regression suite built from fictional, clearly labelled quotes.
 - **Pruning:** a randomized property test proving that pruning never changes results.
+- **Monitoring (pure, no database):**
+  - switching-cost calculations, including unknown cancellation conditions
+  - change detection: increases and decreases with $ and %, thresholds, confirmations vs price changes, recalculations, configuration changes, promotions, stale and missing prices, new quotes, illustrative vs real
+  - equivalent vs non-equivalent series
+- **PostgreSQL (with `TEST_DATABASE_URL`):**
+  - migrations and checksums
+  - persistence of prices, trips and conversations
+  - append-only and duplicate observations
+  - JSON import: dry run, history, idempotence, no overwrites, broken files
+  - monitoring end to end: checks, scheduled runs without double runs, notifications and dedupe, email success and failure, adapters
+  - failure handling: database down, not configured
 - **AI layer (mocked providers, no network):**
   - natural-language parsing (basic mode)
   - patch application and schema validation
@@ -133,6 +230,7 @@ The tests cover:
   - invalid output, provider failures and rate limits
   - missing configuration
   - Anthropic request shape and error mapping
+  - answers about recorded price history and switching, with invented price drops rejected
 
 ## Project layout
 
@@ -146,15 +244,18 @@ src/
                        payments.ts (schedule & cancellation exposure), ticketUsage.ts (usability)
     optimizer/         optimize.ts (enumerate → constrain → bound → price → rank → award),
                        bound.ts (lower bounds for pruning), constraints.ts, scoring.ts
-  data/                Catalog, reference estimates, illustrative dataset, JSON store, sources registry,
+  db/                  PostgreSQL: pool, migrations, observation queries, JSON import
+  monitoring/          fingerprint.ts (equivalent configurations), series.ts (history), detect.ts (change detection),
+                       switching.ts (switching costs), service.ts (checks, scheduling), notify.ts, adapters.ts
+  data/                Catalog, reference estimates, illustrative dataset, store facade + backends/ (json, pg), sources registry,
                        entrySchema.ts (validation), observations.ts (re-check history),
                        importers/ (paste-quote and bulk ticket parsers)
   ai/                  The assistant: types.ts (proposal schema), patch.ts (apply/diff/describe), digest.ts (optimizer facts),
                        grounding.ts (figure checks), prompts.ts, service.ts (workflow), providers/ (anthropic, rules, config)
   app/                 Next.js pages and API routes (/api/optimize, /api/prices, /api/prices/recheck, /api/trips,
-                       /api/assistant, /api/conversations)
+                       /api/assistant, /api/conversations, /api/monitoring/*, /api/notifications/*)
   components/          React UI (components/prices/ holds the price-data workflows)
-scripts/bench.ts       Benchmark
+scripts/               bench.ts, db-migrate.ts, import-json.ts, monitor.ts
 tests/                 Vitest suites and hand-checkable fixtures (all prices fictional)
 docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones and status)
 ```
@@ -173,6 +274,12 @@ docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones 
   - Basic mode understands a limited set of phrasings.
   - The assistant can't express things the optimizer doesn't model: several rooms, flights, per-day park plans.
   - Explanations deliberately won't state figures the optimizer didn't produce, even when they are simple arithmetic.
-- Single-user, local storage. No accounts, scheduling or notifications yet.
+- **Monitoring:**
+  - It only knows the prices you record. It can't see live prices or availability: there is no authorized automatic source (the adapter interface exists, with none registered).
+  - It requires PostgreSQL.
+  - The tracked configuration is the trip's preferred plan.
+  - Switching analysis assumes cancel-and-rebook; Disney can sometimes modify a booking or apply an offer instead.
+- **Imported history:** the JSON store kept only price, date, status and source for earlier observations, so other details of those observations are assumed unchanged (stated on each record).
+- Single-user. No accounts.
 
 For design decisions and the full calculation rules, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For status and next steps, see [docs/ROADMAP.md](docs/ROADMAP.md).

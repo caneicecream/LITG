@@ -5,7 +5,11 @@ import { formatCents, type Cents } from "@/domain/money";
 import { optimize } from "@/domain/optimizer/optimize";
 import { parseTripRequest } from "@/domain/schema";
 import type { Catalog, OptimizationResult, PriceData, TripRequest } from "@/domain/types";
+import { baselineConfiguration } from "@/domain/optimizer/optimize";
+import { configKey, fingerprint } from "@/monitoring/fingerprint";
+import type { ObservationRecord } from "@/monitoring/observations";
 import { buildDigest, summarizeRun } from "./digest";
+import { historyFacts } from "./history";
 import { checkGrounding, groundExplanation } from "./grounding";
 import { applyPatch, defaultQuestions, diffRequests, moneyMentions } from "./patch";
 import { AiError, type AiProvider } from "./providers/provider";
@@ -40,6 +44,8 @@ export interface AssistantDeps {
   provider: AiProvider;
   catalog: Catalog;
   loadData: (opts: { includeIllustrative: boolean }) => Promise<PriceData>;
+  /** Recorded price observations for configuration fingerprints (price-history questions). */
+  loadObservations?: (fingerprints: string[]) => Promise<ObservationRecord[]>;
   now?: () => Date;
 }
 
@@ -299,7 +305,7 @@ async function explainInto(
   previous: ReturnType<typeof summarizeRun> | null = null,
   variants: Conversation["lastVariants"] = conv.lastVariants,
 ): Promise<void> {
-  const facts = buildDigest({ result, request: conv.request, previous, variants });
+  const facts = buildDigest({ result, request: conv.request, previous, variants, history: await loadHistoryFacts(deps, conv.request, result) });
   let raw: unknown = null;
   let note: string | undefined;
   try {
@@ -319,6 +325,23 @@ async function explainInto(
       explanation: { facts, cited: grounded.cited, grounded: grounded.grounded, rejectedReason: grounded.rejectedReason ?? note },
     }),
   );
+}
+
+/**
+ * Price-history and switching facts for the preferred plan, from recorded
+ * observations. A failure here (e.g. the database is down) only drops these
+ * facts; the rest of the explanation still works.
+ */
+async function loadHistoryFacts(deps: AssistantDeps, request: TripRequest, result: OptimizationResult): Promise<string[]> {
+  if (!deps.loadObservations) return [];
+  try {
+    const base = baselineConfiguration(request);
+    const fps = "config" in base ? [fingerprint(configKey(base.config, request))] : [];
+    const [observations, data] = await Promise.all([fps.length ? deps.loadObservations(fps) : [], deps.loadData({ includeIllustrative: request.data.includeIllustrative })]);
+    return historyFacts({ request, result, data, observations });
+  } catch {
+    return ["Price history: recorded price history is unavailable right now (the database could not be reached)."];
+  }
 }
 
 function save(deps: AssistantDeps, conv: Conversation): Promise<Conversation> {

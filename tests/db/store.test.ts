@@ -111,6 +111,8 @@ describeDb("PostgreSQL store", () => {
     expect(got?.name).toBe("Feb trip (renamed)");
     expect(got?.runs.map((r) => r.comparable)).toEqual([4, 3]);
     expect(got?.request).toEqual(defaultTripRequest());
+    // Key order survives the round trip (jsonb reorders keys; the store re-parses).
+    expect(Object.keys(got!.request.weights)).toEqual(Object.keys(defaultTripRequest().weights));
     expect(await store.deleteTrip(t.id)).toBe(true);
     expect(await store.getTrip(t.id)).toBeUndefined();
   });

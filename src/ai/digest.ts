@@ -48,9 +48,11 @@ export interface DigestInput {
   request: TripRequest;
   previous?: RunSummary | null;
   variants?: { label: string; summary: RunSummary | null; error?: string }[];
+  /** Recorded price history and switching facts (see history.ts). */
+  history?: string[];
 }
 
-export function buildDigest({ result: r, request, previous, variants }: DigestInput): Fact[] {
+export function buildDigest({ result: r, request, previous, variants, history }: DigestInput): Fact[] {
   const texts: string[] = [];
   const add = (t: string) => texts.push(t);
 
@@ -186,6 +188,8 @@ export function buildDigest({ result: r, request, previous, variants }: DigestIn
     } else add(`Comparison "${v.label}": no option could be fully priced.`);
     if (s.bestValue) add(`Comparison "${v.label}": best value ${formatCents(s.bestValue.totalCents)}${s.bestValue.score !== null ? ` (score ${s.bestValue.score}/100)` : ""} — ${s.bestValue.label}.`);
   }
+
+  for (const h of history ?? []) add(h);
 
   return texts.map((text, i) => ({ id: `F${i + 1}`, text }));
 }

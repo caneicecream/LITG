@@ -77,7 +77,14 @@ export function groundExplanation(
 export function deterministicExplanation(facts: Fact[], context: { question: string; diff: string[] }): { message: string; cited: string[] } {
   const pick = (pred: (f: Fact) => boolean, max = 1) => facts.filter(pred).slice(0, max);
   const q = context.question.toLowerCase();
-  const chosen: Fact[] = [
+  // Price-history and switching questions are answered from those facts alone.
+  const aboutHistory = /record|histor|observ|trend|drop|went (up|down)|price change|has the price/.test(q);
+  const aboutSwitching = /switch|rebook|cancel|worth/.test(q);
+  const focused = [
+    ...(aboutHistory ? pick((f) => f.text.startsWith("Price history"), 8) : []),
+    ...(aboutSwitching ? pick((f) => f.text.startsWith("Switching analysis"), 8) : []),
+  ];
+  const chosen: Fact[] = focused.length ? [...pick((f) => f.text.startsWith("These results use ILLUSTRATIVE")), ...focused] : [
     ...pick((f) => f.text.startsWith("These results use ILLUSTRATIVE")),
     ...pick((f) => f.text.startsWith("No option could be fully priced")),
     ...pick((f) => f.text.startsWith("Before this change"), 3),

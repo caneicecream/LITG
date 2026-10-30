@@ -1,0 +1,22 @@
+# Local PostgreSQL for price history and monitoring (optional).
+#   docker compose up -d db
+#   DATABASE_URL=postgresql://dvo:dvo@localhost:5432/dvo  (put it in .env.local)
+#   npm run db:migrate
+# Development credentials only; never use these anywhere reachable from the internet.
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: dvo
+      POSTGRES_PASSWORD: dvo
+      POSTGRES_DB: dvo
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - dvo-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dvo"]
+      interval: 5s
+      retries: 10
+volumes:
+  dvo-pg:

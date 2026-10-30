@@ -12,12 +12,31 @@ import { StatusChip } from "./ui";
 export function TripList() {
   const [trips, setTrips] = useState<SavedTrip[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Monitoring (needs PostgreSQL): trip id → monitor id.
+  const [monitoring, setMonitoring] = useState<{ available: boolean; byTrip: Record<string, string> }>({ available: false, byTrip: {} });
 
-  const load = () =>
+  const load = () => {
     fetch("/api/trips")
-      .then((r) => r.json())
-      .then((b) => setTrips(b.trips))
-      .catch((e) => setError(String(e)));
+      .then(async (r) => {
+        const b = await r.json();
+        if (!r.ok) throw new Error(b.errors?.join(" ") ?? `Error ${r.status}`);
+        setTrips(b.trips);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    fetch("/api/monitoring")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => b && setMonitoring({ available: b.available, byTrip: Object.fromEntries((b.monitors ?? []).map((m: { tripId: string; id: string }) => [m.tripId, m.id])) }))
+      .catch(() => undefined);
+  };
+
+  const monitor = async (t: SavedTrip) => {
+    const r = await fetch("/api/monitoring", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tripId: t.id }) });
+    const b = await r.json().catch(() => ({}));
+    if (!r.ok) return setError(b.errors?.join(" ") ?? `Error ${r.status}`);
+    // Run a first check right away so the monitor has a baseline.
+    await fetch(`/api/monitoring/${b.monitor.id}/check`, { method: "POST" });
+    location.href = `/monitoring/${b.monitor.id}`;
+  };
   useEffect(() => {
     load();
   }, []);
@@ -37,6 +56,7 @@ export function TripList() {
         <h1>Saved trips</h1>
         <p className="muted">
           Each save re-runs the optimizer and keeps a snapshot, so you can see how the best options change as you add or update prices.
+          {monitoring.available ? " Press “Monitor” to track a trip's price history and changes." : ""}
         </p>
       </div>
       {trips.length === 0 && (
@@ -55,6 +75,15 @@ export function TripList() {
               <Link className="btn" href={`/?trip=${t.id}`}>
                 Open
               </Link>
+              {monitoring.byTrip[t.id] ? (
+                <Link className="btn" href={`/monitoring/${monitoring.byTrip[t.id]}`}>
+                  Monitoring ✓
+                </Link>
+              ) : monitoring.available ? (
+                <button onClick={() => monitor(t)} title="Track this trip's prices over time (opt-in)">
+                  Monitor
+                </button>
+              ) : null}
               <button className="danger" onClick={() => remove(t)}>
                 Delete
               </button>
@@ -66,6 +95,7 @@ export function TripList() {
               {pref ? ` · prefers ${pref.name.replace("Disney's ", "")}` : ""} · updated {new Date(t.updatedAt).toLocaleString()}
             </p>
             {t.runs.length > 0 && (
+              <div className="scroll-x">
               <table className="cmp">
                 <thead>
                   <tr>
@@ -96,6 +126,7 @@ export function TripList() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         );

@@ -325,12 +325,13 @@ export function detectEvents(prev: CheckSnapshot | null, cur: CheckSnapshot, ctx
 
   // Stale evidence.
   if (t?.dataStatus === "stale") {
-    const staleLines = t.lines.filter((l) => l.status === "stale");
+    // Lines covered by a package quote ($0 here) are represented by the quote's own line.
+    const staleLines = t.lines.filter((l) => l.status === "stale" && l.amountCents !== 0);
     events.push({
       type: "stale",
       severity: "notice",
       title: "Prices need re-checking",
-      detail: `Some prices behind your plan are older than your staleness setting. A stored price is not a current price: re-check ${staleLines.map((l) => l.label.toLowerCase()).join(", ") || "them"}.`,
+      detail: `Some prices behind your plan are older than your staleness setting. A stored price is not a current price: re-check ${staleLines.map((l) => l.label).join(", ") || "them"}.`,
       notify: s.notifyOn.stale,
       dedupeKey: k("stale", t.fingerprint, cur.dataHash),
       evidence: staleLines.map((l) => `${l.label}: ${l.source}`),

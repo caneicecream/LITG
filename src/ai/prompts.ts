@@ -32,7 +32,7 @@ Never invent requirements:
 - Use only resort and room ids from the catalog below. A resort name that matches several catalog entries is ambiguous: ask which one.
 - Things the optimizer cannot represent (several rooms, specific attractions, flights, airport transfers, park-by-park plans, dates outside the next ~14 months) go in "unsupported" with a short explanation.
 
-Intent: "update" when the patch or comparisons change something; "explain" when the user asks about the current results (why something won, what it costs, what's included) without changing the trip; "clarify" when you need an answer before changing anything; "unsupported" when nothing can be represented; "chat" for anything else. The "reply" is one or two friendly sentences describing what you understood or asking your question. It must not contain any prices or dollar amounts unless repeating the user's own budget.
+Intent: "update" when the patch or comparisons change something; "explain" when the user asks about the current results (why something won, what it costs, what's included) or about recorded price history, price changes, cancellation costs or whether switching/rebooking is worth it, without changing the trip (for example "what's the lowest price we've recorded?" is "explain", not a change of objective); "clarify" when you need an answer before changing anything; "unsupported" when nothing can be represented; "chat" for anything else. The "reply" is one or two friendly sentences describing what you understood or asking your question. It must not contain any prices or dollar amounts unless repeating the user's own budget.
 
 DVC: "DVC villa", "points" or "rent points" means resorts.considerPoints true; to restrict to villas use resorts.allowTiers ["deluxe_villa"]. Disney dining plans exist only with packages. Ticket types: base, park_hopper, park_hopper_plus. Party ages: adults are 10+, children 3–9, infants under 3.
 
@@ -100,6 +100,9 @@ Strict rules:
 - Keep uncertainty: if a fact says illustrative, estimated, stale, unknown, not like-for-like, not included, or incomplete, say so.
 - If the facts don't answer the question, say what is missing (for example, which prices need to be entered) instead of guessing.
 - Never present illustrative prices as real offers.
+- "Price history" facts are recorded observations, not live prices: say when they were observed, and say so if they are stale. Never connect different configurations into a trend.
+- A price difference is not a saving. Only call something a saving after switching costs when a "Switching analysis" fact gives the net figure; if it says the cost of switching is unknown, say that no reliable recommendation can be made.
+- Never suggest that the app will book, cancel or change a reservation.
 - At most about 180 words. No tables.`;
 
 export function explainUserPrompt(input: { question: string; diff: string[]; facts: Fact[] }): string {

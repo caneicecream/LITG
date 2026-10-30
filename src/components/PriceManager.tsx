@@ -36,17 +36,23 @@ export function PriceManager() {
   const [kindFilter, setKindFilter] = useState<UserPriceEntry["kind"] | "all">("all");
   const [staleDays, setStaleDays] = useState(14);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
   const load = () =>
     fetch("/api/prices")
-      .then((r) => r.json())
-      .then((b) => setEntries(b.entries));
+      .then(async (r) => {
+        const b = await r.json();
+        if (!r.ok) throw new Error(b.errors?.join(" ") ?? `Error ${r.status}`);
+        setLoadError(null);
+        setEntries(b.entries);
+      })
+      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
   useEffect(() => {
     setStaleDays(staleAfterDays());
     load();
   }, []);
 
   const remove = async (id: string) => {
-    if (!confirm("Delete this entry and its history? This cannot be undone.")) return;
+    if (!confirm("Delete this entry? It is removed from your prices; with a database, its recorded price history is kept for monitoring.")) return;
     await fetch(`/api/prices?id=${encodeURIComponent(id)}`, { method: "DELETE" });
     load();
   };
@@ -62,6 +68,7 @@ export function PriceManager() {
 
   return (
     <div className="stack" style={{ gap: 16, maxWidth: 1150 }}>
+      {loadError && <div className="banner banner-error">{loadError}</div>}
       <div className="stack" style={{ gap: 6 }}>
         <h1>Price data</h1>
         <p className="muted">

@@ -354,14 +354,18 @@ export function describeRequest(r: TripRequest, catalog: Catalog): RequestEntry[
     { key: "prefBooking", section: "preferred", label: "Preferred booking", value: r.preferred.bookingMethod ?? "separate", kind: "preference" },
     { key: "prefDining", section: "preferred", label: "Preferred dining", value: DINING_LABEL[r.preferred.dining ?? "out_of_pocket"], kind: "preference" },
     { key: "objective", section: "objective", label: "Ranking", value: r.objective === "best_value" ? "best value" : "lowest total cost", kind: "preference" },
-    { key: "weights", section: "objective", label: "Value weights", value: Object.entries(r.weights).map(([k, v]) => `${k} ${v}`).join(", "), kind: "preference" },
-    { key: "eligibility", section: "eligibility", label: "Offer eligibility", value: Object.entries(r.eligibility).map(([k, v]) => `${k.replace("_", " ")}: ${v}`).join(", "), kind: "setting" },
+    { key: "weights", section: "objective", label: "Value weights", value: WEIGHT_ORDER.map((k) => `${k} ${r.weights[k]}`).join(", "), kind: "preference" },
+    { key: "eligibility", section: "eligibility", label: "Offer eligibility", value: AUDIENCE_ORDER.map((k) => `${k.replace("_", " ")}: ${r.eligibility[k]}`).join(", "), kind: "setting" },
     { key: "illustrative", section: "data", label: "Illustrative demo prices", value: r.data.includeIllustrative ? "included" : "excluded", kind: "setting" },
   ];
   return e;
 }
 
 /** Readable "Label: before → after" lines for everything that differs. */
+// Fixed orders: stored requests may come back with object keys reordered (PostgreSQL jsonb).
+const WEIGHT_ORDER = ["price", "resort", "convenience", "ticket", "dining", "dates"] as const;
+const AUDIENCE_ORDER = ["florida_resident", "annual_passholder", "military"] as const;
+
 export function diffRequests(before: TripRequest, after: TripRequest, catalog: Catalog): string[] {
   const a = new Map(describeRequest(before, catalog).map((x) => [x.key, x]));
   return describeRequest(after, catalog)

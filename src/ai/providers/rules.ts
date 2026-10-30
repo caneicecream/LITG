@@ -207,8 +207,15 @@ export function interpretWithRules(input: InterpretInput): Proposal {
     note("dining.policy", m[0], `${firm ? "a required" : "a preferred"} ${quick ? "Quick-Service " : ""}dining plan`);
   }
 
+  // Questions about recorded prices or switching are explanations, never a change of objective
+  // ("what's the lowest price we've recorded?" must not switch the ranking to lowest cost).
+  const asksHistory =
+    /\b(recorded|history|historical|observed|trend|rebook(?:ing)?|price (?:drops?|dropped|changes?|changed|went (?:up|down))|gone (?:up|down)|worth (?:it to )?switch(?:ing)?|switching (?:costs?|worth)|should (?:i|we) switch|cancell?ation (?:costs?|fees?|penalt(?:y|ies)))\b/.test(t);
+
   // Objective
-  if (/\bexperience\b|\bbest value\b|\bnot (?:just )?(?:the )?cheapest\b|\bcare more about\b/.test(t)) {
+  if (asksHistory) {
+    // handled as an explanation below
+  } else if (/\bexperience\b|\bbest value\b|\bnot (?:just )?(?:the )?cheapest\b|\bcare more about\b/.test(t)) {
     patch.objective = { objective: "best_value", weights: { price: 30, resort: 25, convenience: 20, ticket: null, dining: null, dates: null } };
     note("objective", "experience over price", "ranking by best value with less weight on price");
   } else if (/\bcheapest\b|\blowest (?:price|cost|total)\b/.test(t) && !/\bwhy\b/.test(t)) {
@@ -224,7 +231,7 @@ export function interpretWithRules(input: InterpretInput): Proposal {
   if (/\bflights?\b|\bairfare\b/.test(t)) unsupported.push("Flights aren't priced; add an estimate as an other expense in the planner.");
 
   const changed = Object.entries(patch).some(([, v]) => v !== null) || comparisons.length > 0;
-  const asksWhy = /\b(why|explain|how much|what makes|break ?down|which promotions?|what'?s included)\b/.test(t) || /\?$/.test(text);
+  const asksWhy = asksHistory || /\b(why|explain|how much|what makes|break ?down|which promotions?|what'?s included)\b/.test(t) || /\?$/.test(text);
   const intent: Proposal["intent"] = changed ? "update" : clarifications.length ? "clarify" : unsupported.length ? "unsupported" : asksWhy ? "explain" : "chat";
   const reply = changed
     ? `I understood: ${understood.join("; ")}.`

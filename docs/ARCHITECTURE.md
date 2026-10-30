@@ -5,7 +5,9 @@
 | Layer | Location | Responsibility |
 | --- | --- | --- |
 | **Domain** (pricing + optimization) | `src/domain/` | Pure TypeScript with no I/O or framework imports. Calculates costs, checks promotion eligibility and hard constraints, enumerates and ranks configurations, computes savings. Fully deterministic, so the same inputs always give the same output. |
-| **Data** | `src/data/` | Catalog (structure), reference estimates, the illustrative dataset, the user's local store, and a `PriceSource` registry that assembles `PriceData` for the optimizer. |
+| **Data** | `src/data/` | Catalog (structure), reference estimates, the illustrative dataset, the store facade (`store.ts`) with JSON and PostgreSQL backends (`backends/`), and a `PriceSource` registry that assembles `PriceData` for the optimizer. |
+| **Database** | `src/db/` | PostgreSQL pool, versioned migrations, the append-only observation table and the JSON import. Server-only; the domain never imports it. |
+| **Monitoring** | `src/monitoring/` | Pure parts (configuration fingerprints, price series, change detection, switching-cost analysis) and the service that runs checks, schedules them and sends notifications. See *Price history and monitoring*. |
 | **App** | `src/app/`, `src/components/` | Next.js pages and API routes. The UI only collects a `TripRequest` and renders an `OptimizationResult`; it does no pricing of its own. |
 | **AI** | `src/ai/` | Interprets natural language into a reviewable patch to the `TripRequest`, and explains the optimizer's result from a facts digest. It never computes or states a price the optimizer didn't produce. See *AI-assisted planning*. |
 
@@ -13,7 +15,8 @@
 
 - **Next.js + TypeScript** in a single app: one language end to end, runs locally with `npm run dev`, and leaves a straightforward path to deployment later. No microservices.
 - **Optimizer in TypeScript, not Python:** the problem is enumeration plus integer arithmetic, not numerical computing. Sharing types between the engine, the API and the UI removes a whole class of bugs. A typical run evaluates about 8,000 configurations in about 0.3s.
-- **JSON-file store, not Postgres (yet):** it needs zero setup for a personal demo. All persistence goes through `src/data/store.ts`, so moving to Postgres/Supabase (for monitoring and history) replaces one module.
+- **Two interchangeable stores:** the JSON file needs zero setup and stays the default. PostgreSQL (set `DATABASE_URL`) adds durable, append-only price history and monitoring. All persistence goes through the `src/data/store.ts` facade, so routes and the domain don't know which backend is active.
+- **`pg` with hand-written SQL migrations, no ORM:** the schema is small, the SQL is reviewable in one file (`src/db/migrations.ts`), and constraints such as "observations are append-only" are enforced in the database itself.
 - **Zod** validates every input at the boundary: trip requests and user price entries.
 
 ## Data integrity model
@@ -203,7 +206,8 @@ apply ─▶ optimize(request) [+ optimize(variant) for each comparison] ─▶ 
   - `RulesProvider` is the keyless basic mode. A mock provider is used in tests.
   - If the configured provider fails or returns unusable output, that message is handled by basic mode with a visible notice. The request is never changed by a failed call.
   - Keys live only in server environment variables (`providers/config.ts`).
-- **Persistence.** Conversations live in the same local JSON store as prices and trips, holding the request, confirmed sections, messages (proposals, runs, explanations with their facts) and the latest full result. No new infrastructure is needed; PostgreSQL remains a Milestone 4 decision.
+- **Persistence.** Conversations live in the active store (JSON or PostgreSQL) with prices and trips, holding the request, confirmed sections, messages (proposals, runs, explanations with their facts) and the latest full result.
+- **History questions.** Every explanation also gets *Price history* facts (recorded observations of the preferred plan's exact configuration: latest, previous, change in $ and %, lowest and highest, age and staleness) and *Switching analysis* facts (the same `analyzeSwitching` arithmetic as monitoring). They go through the same grounding check, so the AI cannot invent a price drop or call a price difference a saving. Basic mode treats history and switching questions ("what's the lowest price we've recorded?", "is it worth switching?") as explanations, never as a change of objective. In JSON mode the observations are rebuilt from each entry's re-check history.
 - **Adding a vendor.** Implement `AiProvider` (reuse `prompts.ts` and the zod schemas for structured output) and add a case in `providers/config.ts`.
 
 ## Extending
@@ -211,4 +215,88 @@ apply ─▶ optimize(request) [+ optimize(variant) for each comparison] ─▶ 
 - **New data source:** implement `PriceSource` in `src/data/sources.ts` (e.g. an authorized partner feed) and tag its output with honest provenance. The resolver handles precedence. Nothing in the optimizer changes.
 - **New resort or room:** add it to `src/data/catalog.ts`, and to the illustrative generator if demo coverage is wanted.
 - **AI provider:** see *AI-assisted planning* above.
-- **Monitoring:** saved trips store run snapshots; price entries keep their observation history; booked quotes carry payment and cancellation terms, and savings are already netted against them. Next steps are a scheduled job that re-runs saved requests and change detection over history.
+- **Authorized price adapter:** implement `ObservationAdapter` in `src/monitoring/adapters.ts` and register it. Its quotes are validated like user quotes, must match the tracked configuration exactly, are stored as `verified` observations with the adapter's limitations attached, and identical repeats create nothing. Never point an adapter at Disney's consumer website.
+- **Schema change:** add a migration to `MIGRATIONS` (never edit an applied one; checksums are verified) and bump nothing else.
+- **Optimizer rule change:** bump `ENGINE_VERSION` (`src/domain/optimizer/version.ts`) so monitoring labels the resulting total changes as recalculations, not price changes.
+
+## Price history and monitoring (Milestone 4)
+
+**Central principle:** a lower quoted price is not necessarily a better financial decision. Monitoring tells you what changed, and whether switching would actually save money after the cost of switching.
+
+### Storage
+
+| Table | Contents |
+| --- | --- |
+| `price_entries` | Current state of each price entry (JSON), soft-deleted with `deleted_at` so its history survives. |
+| `price_observations` | One immutable row per observed version of an entry: source, URL, observed date, recorded time, origin (`entry`, `recheck`, `import`, `adapter`), status, value, the full configuration (resort, room, check-in/out, party, booking method, tickets, dining), tax treatment and quoted tax, comparable total, payment/cancellation terms, assumptions, and a snapshot of the entry exactly as observed. A trigger rejects every `UPDATE` and `DELETE`. `UNIQUE (entry_id, content_hash)` makes identical content impossible to record twice. |
+| `trips`, `trip_runs` | Saved trips and every run snapshot (the API returns the latest 50). |
+| `conversations` | Assistant conversations. |
+| `monitors` | One per monitored trip (opt-in): enabled, settings, last/next check. |
+| `monitor_checks` | Append-only log: what each check saw (`CheckSnapshot`) and the events it detected. |
+| `notifications` | In-app notifications (one digest per check), read state, email delivery result. |
+| `app_settings` | Notification preferences (email address). |
+| `schema_migrations` | Applied migrations with SHA-256 checksums. |
+
+**Migrations** (`npm run db:migrate`) run each pending migration in its own transaction under an advisory lock, and refuse to run if an applied migration was edited. The app never migrates implicitly: when the schema is behind, requests get a clear 503 asking you to migrate.
+
+**Connection failures** become `DatabaseUnavailableError` and a 503 with an explanation (`src/lib/guarded.ts`), never a crash. Without `DATABASE_URL`, monitoring endpoints answer "not configured" and the UI shows setup steps; the rest of the app is unaffected.
+
+**JSON import** (`npm run db:import-json`, with `--dry-run`): one transaction, idempotent, never modifies the JSON file. Each entry's `history` becomes observations (marked as reconstructed, since the JSON history kept only price, date, status and source). Rows that already exist are never overwritten; differences are reported. Structurally broken files abort with nothing imported; entries that fail today's validation are imported verbatim with a warning.
+
+### Equivalent configurations (`monitoring/fingerprint.ts`, `series.ts`)
+
+A **fingerprint** is resort | room | check-in | nights | party | booking method | tickets (option and days) | dining. Observations are joined into one trend line only when their fingerprint, **tax treatment** (all-in vs pre-tax) and **evidence** (quoted vs your estimate) all match. Anything else is a separate series, and the UI explains why. A series with one point shows no trend and says a trend needs two observations.
+
+### Checks (`monitoring/service.ts`)
+
+A check re-evaluates the saved trip with the prices stored at that moment, exactly as the planner would, and stores a `CheckSnapshot`:
+
+- hashes of the request, of all price data (ignoring history), of the catalog and reference data, plus `ENGINE_VERSION`;
+- the tracked plan (the trip's preferred plan), the cheapest like-for-like alternative and the cheapest option, with cost lines;
+- the booked reservation pricing the plan, if any, and the switching analysis;
+- observations of the tracked configuration recorded since the previous check, and what any adapter returned.
+
+**A check never creates observations.** It is labelled everywhere as a re-evaluation with stored prices, not a live price check. New observations come only from your entries and re-checks, imports, or an authorized adapter. Re-checking a quote with identical content is rejected ("nothing new to record").
+
+Scheduling: `npm run monitor` (cron), `POST /api/monitoring/run` with `x-monitor-secret` (external scheduler), or `MONITOR_SCHEDULER=on` (in-app timer from `instrumentation.ts`). Due monitors are claimed with `FOR UPDATE SKIP LOCKED` and a short lease, so overlapping schedulers never run a check twice, and one failing monitor doesn't stop the others.
+
+### Change detection (`monitoring/detect.ts`, pure)
+
+Comparing the previous and current snapshots:
+
+1. **Configuration changed** (request hash or tracked fingerprint differs): reported as such; totals are not compared.
+2. **Price change** (`price_decrease` / `price_increase`): same configuration, same real/illustrative class, both complete, and the price data changed. Gives $ and %, and the changed cost lines with their sources. Notifies when the change is at least `minChangeCents` or `minChangePct`, subject to per-type preferences.
+3. **Recalculated**: the total moved but no price data changed (engine/catalog/reference update, or a date-dependent rule). Explicitly "not a change in Disney's price"; never notified.
+4. **Price confirmed / provenance changed**: same total from a newer observation, or a status change (e.g. manual → estimated).
+5. **Promotion applied / ended / possible**, **stale** evidence (once per data state), **price missing** / **price available**, **new comparable quote** (another observation of the same configuration, disclosing a different tax treatment), **cheaper alternative** (reported when it first appears or changes, with the switching verdict).
+
+Every event has a stable `dedupeKey`; a notification digest includes only events never notified before, so the same situation never notifies twice.
+
+### Switching-cost analysis (`monitoring/switching.ts`, pure)
+
+Inputs: reservation total and terms (amount paid, refundability, free-cancellation date, penalty tiers), alternative total and deposit, known fees, other non-refundable amounts, ticket and dining change costs (`null` = unknown), and a minimum benefit.
+
+```
+price difference   = reservation total − alternative total      (never called a saving)
+cancellation cost  = cancellationExposure(terms, total, paid, today)   (null = unknown)
+switching cost     = cancellation + fees + other non-refundable + ticket change + dining change
+net benefit        = price difference − switching cost
+refund             = max(0, paid − cancellation)
+due now            = new deposit + fees
+left to pay        = alternative total − new deposit
+```
+
+Verdicts: **unknown** (any input to the switching cost is unknown, or a price is illustrative/unavailable: "no reliable recommendation can be made"), **not worth it** (net ≤ 0), **review** (positive but below the threshold, not like-for-like, or a price is stale or estimated), **worth considering** (net ≥ threshold on known figures). It always reminds you that the app never books, changes or cancels anything, and that you should book the alternative and confirm its price before cancelling.
+
+### Notifications (`monitoring/notify.ts`)
+
+In-app always (bell with unread count, `/notifications`). Optional email via SMTP (`SMTP_URL`, server-side only), enabled globally and per monitor. A failed email is recorded on the notification and never loses it.
+
+### Price sources and their limits
+
+| Source | What it is | Limitations |
+| --- | --- | --- |
+| Your entries and re-checks | Quotes you copy from booking pages, agents or confirmations | Only as current as the observation date; staleness is flagged. |
+| JSON import | Your earlier JSON history | Earlier observations kept only price, date, status and source; other fields are assumed unchanged (stated on each record). |
+| Authorized adapters | Interface only; **none registered** | Would need a contractual API (e.g. a travel-trade wholesaler). Disney's consumer site is never scraped or automated. |
+| Illustrative data | Demo prices | Never recorded as observations, never compared with real prices. |

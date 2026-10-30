@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Conversation } from "@/ai/types";
 import type { TripRequest } from "@/domain/types";
 import type { Db } from "@/db/pool";
+import { parseTripRequest } from "@/domain/schema";
 import { ensureSchema } from "@/db/migrate";
 import { historyFromObservations, insertObservation, observationsForEntries, type Query } from "@/db/observations";
 import { contentHashOf, observationFromEntry } from "@/monitoring/observations";
@@ -34,6 +35,12 @@ async function tripRuns(q: Query | Db["query"], tripIds: string[]): Promise<Map<
   return map;
 }
 
+/** jsonb doesn't keep key order; re-parse so a stored request reads back exactly like the one saved. */
+function normalizeRequest(r: TripRequest): TripRequest {
+  const parsed = parseTripRequest(r);
+  return parsed.ok ? parsed.request : r;
+}
+
 interface TripRow {
   id: string;
   name: string;
@@ -45,7 +52,7 @@ interface TripRow {
 async function trips(db: Db, where = "", params: unknown[] = []): Promise<SavedTrip[]> {
   const rows = await db.query<TripRow>(`SELECT id, name, request, created_at, updated_at FROM trips ${where} ORDER BY updated_at DESC`, params);
   const runs = await tripRuns(db.query, rows.map((r) => r.id));
-  return rows.map((r) => ({ id: r.id, name: r.name, request: r.request, createdAt: r.created_at, updatedAt: r.updated_at, runs: runs.get(r.id) ?? [] }));
+  return rows.map((r) => ({ id: r.id, name: r.name, request: normalizeRequest(r.request), createdAt: r.created_at, updatedAt: r.updated_at, runs: runs.get(r.id) ?? [] }));
 }
 
 /** `now` is injectable so tests can control recording times. */
