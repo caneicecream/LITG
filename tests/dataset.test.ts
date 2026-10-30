@@ -75,6 +75,7 @@ describe("default scenario end-to-end", () => {
       ticket: { option: "park_hopper_plus", days: 5 },
       dining: "out_of_pocket",
       totalCents: 260_000,
+      taxIncluded: true,
       provenance: { status: "manual", source: "disneyworld.com quote", observedAt: "2026-10-29" },
     };
     const res = optimize({ catalog: CATALOG, data: data([splitEntries([q])]), request: req, now: NOW });

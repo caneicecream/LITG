@@ -6,12 +6,17 @@ import type {
   BookingMethod,
   Configuration,
   DiningPlan,
+  PointChartEntry,
+  PointCost,
   PriceData,
   StayQuote,
   TaxCategory,
   TaxRate,
+  TicketChannel,
   TicketOption,
   TicketPrice,
+  TicketRule,
+  TicketUsability,
   TransportProfile,
 } from "../types";
 
@@ -61,12 +66,19 @@ function compareCandidates<T extends { id: string; provenance: Provenance }>(a: 
 interface Index {
   rooms: Map<string, PriceData["roomRates"]>;
   tickets: Map<string, TicketPrice[]>;
+  points: Map<string, PointChartEntry[]>;
+  quotes: Map<string, StayQuote[]>;
 }
 const indexes = new WeakMap<PriceData, Index>();
 function indexFor(data: PriceData): Index {
   let idx = indexes.get(data);
   if (!idx) {
-    idx = { rooms: groupBy(data.roomRates, (r) => `${r.resortId}/${r.roomTypeId}`), tickets: groupBy(data.ticketPrices, (t) => `${t.option}/${t.days}/${t.age}/${t.channel}`) };
+    idx = {
+      rooms: groupBy(data.roomRates, (r) => `${r.resortId}/${r.roomTypeId}`),
+      tickets: groupBy(data.ticketPrices, (t) => `${t.option}/${t.days}/${t.age}/${t.channel}`),
+      points: groupBy(data.pointCharts, (p) => `${p.resortId}/${p.roomTypeId}`),
+      quotes: groupBy(data.stayQuotes, (q) => `${q.resortId}/${q.roomTypeId}/${q.checkIn}/${q.nights}`),
+    };
     indexes.set(data, idx);
   }
   return idx;
@@ -125,6 +137,10 @@ export function resolveRoomNights(
  * different purchase options, so the best source is chosen per channel and then
  * the channels compete on trust first and price second. Packages can only use
  * Disney-channel tickets.
+ *
+ * When `usable` is given, tickets whose recorded restrictions make them unusable
+ * for the trip are skipped (a cheaper ticket that can't cover the park days is no
+ * bargain); their reasons are pushed to `rejected`.
  */
 export function resolveTicket(
   data: PriceData,
@@ -135,18 +151,29 @@ export function resolveTicket(
   bookingMethod: BookingMethod,
   allowThirdParty: boolean,
   opts: ResolveOptions,
-): Resolved<TicketPrice> | null {
+  usable?: (t: TicketPrice) => TicketUsability,
+  rejected?: TicketUsability[],
+): (Resolved<TicketPrice> & { usability?: TicketUsability }) | null {
   const channels: TicketPrice["channel"][] =
     bookingMethod === "package" || !allowThirdParty ? ["disney"] : ["disney", "third_party"];
-  const perChannel: Resolved<TicketPrice>[] = [];
+  const perChannel: (Resolved<TicketPrice> & { usability?: TicketUsability })[] = [];
   for (const channel of channels) {
-    const best = pickBest(
-      (indexFor(data).tickets.get(`${option}/${days}/${age}/${channel}`) ?? []).filter((t) =>
-        inRange(startDate, t.validFrom, t.validTo),
-      ),
-      opts,
+    let candidates = (indexFor(data).tickets.get(`${option}/${days}/${age}/${channel}`) ?? []).filter((t) =>
+      inRange(startDate, t.validFrom, t.validTo),
     );
-    if (best) perChannel.push(best);
+    // Drop unusable candidates one at a time, so a usable older price can still be chosen.
+    for (;;) {
+      const best = pickBest(candidates, opts);
+      if (!best) break;
+      const usability = usable?.(best.item);
+      if (usability?.status === "violated") {
+        rejected?.push(usability);
+        candidates = candidates.filter((c) => c !== best.item);
+        continue;
+      }
+      perChannel.push({ ...best, usability });
+      break;
+    }
   }
   perChannel.sort(
     (a, b) =>
@@ -155,6 +182,69 @@ export function resolveTicket(
       (a.item.channel < b.item.channel ? -1 : 1),
   );
   return perChannel[0] ?? null;
+}
+
+/** Product-level usage rule for a ticket type; a rule for the exact duration beats a rule for all durations at equal trust. */
+export function resolveTicketRule(
+  data: PriceData,
+  option: TicketOption,
+  days: number,
+  channel: TicketChannel,
+  opts: ResolveOptions,
+): Resolved<TicketRule> | null {
+  const matching = data.ticketRules.filter((r) => r.option === option && r.channel === channel);
+  const specific = pickBest(matching.filter((r) => r.days === days), opts);
+  const generic = pickBest(matching.filter((r) => r.days === null), opts);
+  if (!specific) return generic;
+  if (!generic) return specific;
+  return STATUS_RANK[generic.status] < STATUS_RANK[specific.status] ? generic : specific;
+}
+
+/** Resolve DVC points per night. Same precedence rules as room rates. */
+export function resolvePointNights(
+  data: PriceData,
+  resortId: string,
+  roomTypeId: string,
+  nights: readonly IsoDate[],
+  opts: ResolveOptions,
+): { nights: { date: IsoDate; points: number; status: PriceStatus; source: string }[]; missing: IsoDate[] } {
+  const charts = indexFor(data).points.get(`${resortId}/${roomTypeId}`) ?? [];
+  const out: { date: IsoDate; points: number; status: PriceStatus; source: string }[] = [];
+  const missing: IsoDate[] = [];
+  for (const date of nights) {
+    const dow = dayOfWeek(date);
+    const best = pickBest(
+      charts.filter((c) => inRange(date, c.validFrom, c.validTo) && (!c.daysOfWeek || c.daysOfWeek.includes(dow))),
+      opts,
+    );
+    if (!best) missing.push(date);
+    else out.push({ date, points: best.item.pointsPerNight, status: best.status, source: best.item.provenance.source });
+  }
+  return { nights: out, missing };
+}
+
+/**
+ * Choose the cost of points for a reservation. Each provider (or the user's own
+ * points) is a separate option: trust first, then the lowest cash cost for this
+ * reservation (points × price + fee), then id.
+ */
+export function resolvePointCost(
+  data: PriceData,
+  resortId: string,
+  points: number,
+  opts: ResolveOptions,
+): (Resolved<PointCost> & { cashCents: Cents }) | null {
+  const options: (Resolved<PointCost> & { cashCents: Cents })[] = [];
+  for (const c of data.pointCosts) {
+    if (c.resortIds && !c.resortIds.includes(resortId)) continue;
+    if (c.minPoints !== undefined && points < c.minPoints) continue;
+    const r = pickBest([c], opts);
+    if (r) options.push({ ...r, cashCents: points * c.centsPerPoint + (c.feeCents ?? 0) });
+  }
+  options.sort(
+    (a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || a.cashCents - b.cashCents || (a.item.id < b.item.id ? -1 : 1),
+  );
+  return options[0] ?? null;
 }
 
 export function resolveDiningNights(
@@ -193,7 +283,8 @@ export function matchStayQuote(
   parkDays: number,
   opts: ResolveOptions,
 ): Resolved<StayQuote> | null {
-  const matches = data.stayQuotes.filter((q) => {
+  const candidates = indexFor(data).quotes.get(`${config.resortId}/${config.roomTypeId}/${config.arrival}/${config.nights}`) ?? [];
+  const matches = candidates.filter((q) => {
     if (
       q.resortId !== config.resortId ||
       q.roomTypeId !== config.roomTypeId ||
@@ -210,7 +301,7 @@ export function matchStayQuote(
       if (!q.ticket || q.ticket.option !== config.ticketOption || q.ticket.days !== parkDays) return false;
       if (q.dining !== config.dining) return false;
     } else if (q.ticket || q.dining !== "out_of_pocket") {
-      // A room-only quote covers the room only.
+      // A room-only (cash or points) quote covers the accommodation only.
       return false;
     }
     return true;
@@ -229,9 +320,14 @@ export function resolveTransport(
   );
 }
 
-export function resolveTaxRate(data: PriceData, category: TaxCategory, opts: ResolveOptions): Resolved<TaxRate> | null {
+export function resolveTaxRate(
+  data: PriceData,
+  category: TaxCategory,
+  jurisdictionId: string,
+  opts: ResolveOptions,
+): Resolved<TaxRate> | null {
   return pickBest(
-    data.taxRates.filter((t) => t.category === category),
+    data.taxRates.filter((t) => t.category === category && t.jurisdictionId === jurisdictionId),
     opts,
   );
 }

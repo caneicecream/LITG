@@ -24,9 +24,10 @@ export function checkHardConstraints(config: Configuration, resort: Resort, req:
     v.push(`Stay length outside ${req.dates.minNights}–${req.dates.maxNights} nights`);
   }
   if (req.resorts.allowedResortIds.length > 0 && !req.resorts.allowedResortIds.includes(resort.id)) {
-    v.push(`${resort.name} is not in your allowed resorts`);
+    // One generic reason (not one per resort), so the ruled-out summary stays readable.
+    v.push("Resort is not in your allowed resorts");
   }
-  if (req.resorts.requireOnProperty && !resort.onProperty) v.push("You require a Disney-owned resort");
+  if (req.resorts.requireOnProperty && !resort.disneyOwned) v.push("You require a Disney-owned resort");
   if (!room) v.push("Unknown room type");
   else if (partySize > room.maxOccupancy) v.push(`${room.name} sleeps ${room.maxOccupancy}; your party is ${partySize}`);
 
@@ -45,8 +46,12 @@ export function checkHardConstraints(config: Configuration, resort: Resort, req:
   if (req.dining.policy === "exclude" && config.dining !== "out_of_pocket") v.push("You excluded dining plans");
 
   if (config.bookingMethod === "package") {
-    if (!resort.onProperty) v.push("Disney packages are only available at Disney resorts");
+    if (!resort.disneyOwned) v.push("Disney packages are only available at Disney-owned resorts");
     if (!config.ticketOption) v.push("Disney packages include park tickets");
+  }
+  if (config.bookingMethod === "points") {
+    if (!resort.dvcPoints) v.push(`${resort.name} can't be reserved with DVC points`);
+    if (!req.resorts.considerPoints) v.push("DVC point stays are not enabled for this search");
   }
   if (config.dining !== "out_of_pocket" && config.bookingMethod !== "package") {
     v.push("Disney dining plans can only be purchased as part of a package");

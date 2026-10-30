@@ -34,7 +34,8 @@ export function checkEligibility(promo: Promotion, ctx: PromotionContext): Eligi
   const { config, resort, nights } = ctx;
 
   if (promo.requiresPackage && config.bookingMethod !== "package") reasons.push("requires a package booking");
-  if (promo.resortIds ? !promo.resortIds.includes(resort.id) : !resort.onProperty) {
+  if (config.bookingMethod === "points") reasons.push("cash offers don't apply to DVC point reservations");
+  if (promo.resortIds ? !promo.resortIds.includes(resort.id) : !resort.disneyOwned) {
     reasons.push(`not valid at ${resort.name}`);
   }
   if (promo.roomKeys && !promo.roomKeys.includes(`${config.resortId}/${config.roomTypeId}`)) {

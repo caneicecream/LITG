@@ -1,8 +1,19 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { DiningPlanPrice, Promotion, RoomRate, StayQuote, TicketPrice, TripRequest } from "@/domain/types";
+import type {
+  DiningPlanPrice,
+  PointChartEntry,
+  PointCost,
+  Promotion,
+  RoomRate,
+  StayQuote,
+  TicketPrice,
+  TicketRule,
+  TripRequest,
+} from "@/domain/types";
 import type { Cents } from "@/domain/money";
+import { applyRecheck, type RecheckInput } from "./observations";
 
 /**
  * Local persistence for personal data: user-entered prices/quotes and saved
@@ -12,7 +23,15 @@ import type { Cents } from "@/domain/money";
  */
 
 export type PromotionEntry = Promotion & { kind: "promotion" };
-export type UserPriceEntry = RoomRate | TicketPrice | DiningPlanPrice | StayQuote | PromotionEntry;
+export type UserPriceEntry =
+  | RoomRate
+  | TicketPrice
+  | DiningPlanPrice
+  | StayQuote
+  | PromotionEntry
+  | TicketRule
+  | PointChartEntry
+  | PointCost;
 
 /** Compact snapshot of one optimization run, kept per saved trip (basis for future price monitoring). */
 export interface RunSnapshot {
@@ -53,11 +72,20 @@ async function read(): Promise<StoreFile> {
   try {
     const raw = await fs.readFile(/*turbopackIgnore: true*/ storePath(), "utf8");
     const parsed = JSON.parse(raw) as StoreFile;
-    return { version: 1, prices: parsed.prices ?? [], trips: parsed.trips ?? [] };
+    return { version: 1, prices: (parsed.prices ?? []).map(migrateEntry), trips: parsed.trips ?? [] };
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, prices: [], trips: [] };
     throw err;
   }
+}
+
+/**
+ * Upgrade entries saved by earlier versions. Milestone 1 stay quotes were
+ * always tax-inclusive totals (the form said so), so `taxIncluded` defaults to true.
+ */
+export function migrateEntry(e: UserPriceEntry): UserPriceEntry {
+  if (e.kind === "stay_quote" && (e as Partial<StayQuote>).taxIncluded === undefined) return { ...e, taxIncluded: true };
+  return e;
 }
 
 async function write(data: StoreFile): Promise<void> {
@@ -90,6 +118,26 @@ export function addPrice(entry: Omit<UserPriceEntry, "id">): Promise<UserPriceEn
     const saved = { ...entry, id: `user-${randomUUID()}` } as UserPriceEntry;
     d.prices.push(saved);
     return saved;
+  });
+}
+
+/** Add several entries at once (bulk entry). Callers validate all entries first, so this is all-or-nothing. */
+export function addPrices(entries: Omit<UserPriceEntry, "id">[]): Promise<UserPriceEntry[]> {
+  return mutate((d) => {
+    const saved = entries.map((entry) => ({ ...entry, id: `user-${randomUUID()}` }) as UserPriceEntry);
+    d.prices.push(...saved);
+    return saved;
+  });
+}
+
+/** Record a re-check of an entry, keeping the previous observation in its history. */
+export function recheckPrice(id: string, input: RecheckInput): Promise<{ ok: true; entry: UserPriceEntry } | { ok: false; error: string }> {
+  return mutate((d) => {
+    const i = d.prices.findIndex((p) => p.id === id);
+    if (i < 0) return { ok: false as const, error: "Not found" };
+    const res = applyRecheck(d.prices[i]!, input, new Date().toISOString());
+    if (res.ok) d.prices[i] = res.entry;
+    return res;
   });
 }
 

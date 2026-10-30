@@ -1,6 +1,7 @@
 import type { IsoDate } from "@/domain/dates";
 import type { Provenance } from "@/domain/provenance";
-import type { DiningPlanPrice, Promotion, RoomRate, TicketOption, TicketPrice } from "@/domain/types";
+import type { DiningPlanPrice, PointChartEntry, PointCost, Promotion, RoomRate, TicketOption, TicketPrice } from "@/domain/types";
+import { CATALOG } from "./catalog";
 
 /**
  * ILLUSTRATIVE DEMO DATA. NOT REAL PRICES.
@@ -33,18 +34,59 @@ export const DEMO_SEASONS: { from: IsoDate; to: IsoDate; factor: number; name: s
   { from: "2027-12-18", to: "2027-12-31", factor: 1.55, name: "Holidays" },
 ];
 
-/** Demo base nightly rates (Sun–Thu, factor 1.0), in dollars. */
+/** Demo DVC villa premium by resort (applies to cash rates and point charts alike). */
+const DVC_PREMIUM: Record<string, number> = {
+  "bay-lake-tower": 1.25,
+  riviera: 1.15,
+  "saratoga-springs": 0.9,
+  "old-key-west": 0.85,
+  "kidani-village": 1.0,
+  "beach-club-villas": 1.2,
+  "polynesian-villas": 1.3,
+};
+const VILLA_SIZE: Record<string, number> = { studio: 1, "one-bedroom": 2, "two-bedroom": 2.8 };
+
+/** Demo base nightly cash rates (Sun–Thu, factor 1.0), in dollars. Every catalog room has one. */
 const BASE_RATES: { resortId: string; roomTypeId: string; dollars: number }[] = [
   { resortId: "pop-century", roomTypeId: "standard", dollars: 190 },
-  { resortId: "all-star-movies", roomTypeId: "standard", dollars: 165 },
   { resortId: "art-of-animation", roomTypeId: "standard", dollars: 185 },
   { resortId: "art-of-animation", roomTypeId: "family-suite", dollars: 440 },
+  { resortId: "all-star-movies", roomTypeId: "standard", dollars: 165 },
+  { resortId: "all-star-movies", roomTypeId: "preferred", dollars: 185 },
+  { resortId: "all-star-music", roomTypeId: "standard", dollars: 165 },
+  { resortId: "all-star-music", roomTypeId: "family-suite", dollars: 420 },
+  { resortId: "all-star-sports", roomTypeId: "standard", dollars: 160 },
   { resortId: "caribbean-beach", roomTypeId: "standard", dollars: 290 },
   { resortId: "coronado-springs", roomTypeId: "standard", dollars: 275 },
-  { resortId: "yacht-club", roomTypeId: "standard", dollars: 560 },
+  { resortId: "coronado-springs", roomTypeId: "gran-destino", dollars: 330 },
+  { resortId: "port-orleans-fq", roomTypeId: "standard", dollars: 285 },
+  { resortId: "port-orleans-riverside", roomTypeId: "standard", dollars: 280 },
+  { resortId: "animal-kingdom-lodge", roomTypeId: "standard", dollars: 450 },
+  { resortId: "animal-kingdom-lodge", roomTypeId: "savanna", dollars: 600 },
+  { resortId: "beach-club", roomTypeId: "standard", dollars: 560 },
+  { resortId: "boardwalk-inn", roomTypeId: "standard", dollars: 560 },
   { resortId: "contemporary", roomTypeId: "standard", dollars: 590 },
+  { resortId: "contemporary", roomTypeId: "theme-park-view", dollars: 760 },
+  { resortId: "grand-floridian", roomTypeId: "standard", dollars: 720 },
+  { resortId: "grand-floridian", roomTypeId: "lagoon-view", dollars: 900 },
+  { resortId: "polynesian", roomTypeId: "standard", dollars: 690 },
+  { resortId: "polynesian", roomTypeId: "theme-park-view", dollars: 950 },
+  { resortId: "wilderness-lodge", roomTypeId: "standard", dollars: 480 },
+  { resortId: "yacht-club", roomTypeId: "standard", dollars: 560 },
+  { resortId: "swan", roomTypeId: "standard", dollars: 380 },
+  { resortId: "dolphin", roomTypeId: "standard", dollars: 360 },
   { resortId: "off-property", roomTypeId: "standard", dollars: 140 },
+  { resortId: "off-property-suite", roomTypeId: "suite", dollars: 210 },
+  { resortId: "disney-springs-area", roomTypeId: "standard", dollars: 170 },
+  // DVC villas booked for cash
+  ...dvcCash(),
 ];
+
+function dvcCash(): { resortId: string; roomTypeId: string; dollars: number }[] {
+  return CATALOG.resorts
+    .filter((r) => r.dvcPoints)
+    .flatMap((r) => r.roomTypes.map((rt) => ({ resortId: r.id, roomTypeId: rt.id, dollars: 480 * (DVC_PREMIUM[r.id] ?? 1) * (VILLA_SIZE[rt.id] ?? 1) })));
+}
 
 const WEEKEND_UPLIFT = 1.12;
 const SUN_THU = [0, 1, 2, 3, 4];
@@ -106,6 +148,8 @@ function ticketPrices(): TicketPrice[] {
             cents: toCents(byOption[option] * (age === "child" ? 0.95 : 1)),
             taxIncluded: false,
             channel: "disney",
+            // Illustrative usage window (days + 3, single-day tickets on the start date only). Not Disney's actual rules.
+            usage: { useWithinDays: days === 1 ? 1 : days + 3, parkReservationRequired: null, notes: "Illustrative usage window, not an actual ticket rule." },
             provenance: prov,
           });
         }
@@ -173,9 +217,57 @@ export const ILLUSTRATIVE_PROMOTIONS: Promotion[] = [
   },
 ];
 
+/** Demo DVC point charts: points per night by villa, season and weekday group. Not real point charts. */
+function pointCharts(): PointChartEntry[] {
+  const out: PointChartEntry[] = [];
+  for (const r of CATALOG.resorts.filter((x) => x.dvcPoints)) {
+    for (const rt of r.roomTypes) {
+      DEMO_SEASONS.forEach((season, i) => {
+        for (const [days, mult, tag] of [
+          [SUN_THU, 1, "wk"],
+          [FRI_SAT, 1.25, "we"],
+        ] as const) {
+          out.push({
+            id: `demo-points-${r.id}-${rt.id}-${i}-${tag}`,
+            kind: "point_chart",
+            resortId: r.id,
+            roomTypeId: rt.id,
+            validFrom: season.from,
+            validTo: season.to,
+            daysOfWeek: [...days],
+            pointsPerNight: Math.round(14 * (DVC_PREMIUM[r.id] ?? 1) * (VILLA_SIZE[rt.id] ?? 1) * season.factor * mult),
+            provenance: prov,
+          });
+        }
+      });
+    }
+  }
+  return out;
+}
+
+export const ILLUSTRATIVE_POINT_COSTS: PointCost[] = [
+  {
+    id: "demo-point-rental",
+    kind: "point_cost",
+    label: "Illustrative point rental",
+    type: "rental",
+    centsPerPoint: 2100,
+    terms: {
+      depositCents: null,
+      installments: [],
+      refundability: "non_refundable",
+      cancellationPenalties: [],
+      notes: "Illustrative terms. Point rentals are commonly paid in full and non-refundable; check the actual provider's contract.",
+    },
+    provenance: prov,
+  },
+];
+
 export const ILLUSTRATIVE_DATA = {
   roomRates: roomRates(),
   ticketPrices: ticketPrices(),
   diningPlanPrices: diningPlanPrices(),
   promotions: ILLUSTRATIVE_PROMOTIONS,
+  pointCharts: pointCharts(),
+  pointCosts: ILLUSTRATIVE_POINT_COSTS,
 };

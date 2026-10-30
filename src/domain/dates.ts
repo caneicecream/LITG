@@ -19,8 +19,19 @@ function toUtc(d: IsoDate): number {
   return t;
 }
 
+// The optimizer adds days to the same few hundred dates hundreds of thousands of
+// times; Date construction dominates, so results are memoized (bounded).
+const addDaysMemo = new Map<string, IsoDate>();
+
 export function addDays(d: IsoDate, n: number): IsoDate {
-  return new Date(toUtc(d) + n * 86_400_000).toISOString().slice(0, 10);
+  const key = `${d}|${n}`;
+  let out = addDaysMemo.get(key);
+  if (out === undefined) {
+    out = new Date(toUtc(d) + n * 86_400_000).toISOString().slice(0, 10);
+    if (addDaysMemo.size > 50_000) addDaysMemo.clear();
+    addDaysMemo.set(key, out);
+  }
+  return out;
 }
 
 /** Whole days from a to b (b - a). */

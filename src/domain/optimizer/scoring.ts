@@ -22,20 +22,22 @@ export function dateDistance(config: Configuration, req: TripRequest): number {
 
 /**
  * Best-value score (0–100). Deliberately simple and transparent: each factor is
- * scored 0–100 by an explicit rule and combined by the user's weights. Price is
- * scored relative to the cheapest and most expensive comparable options, so a
- * score is only meaningful within one optimization run.
+ * scored 0–100 by an explicit rule and combined by the user's weights.
+ *
+ * Price is scored as cheapest ÷ this total (the cheapest comparable option
+ * scores 100; one costing 25% more scores 80). Unlike min–max scaling this does
+ * not depend on the most expensive option, so an outlier can't distort the
+ * scores of everything else, and an upper bound can be computed before pricing.
  */
 export function valueScore(
   e: { config: Configuration; totalCents: number },
   resort: Resort,
   req: TripRequest,
   catalog: Catalog,
-  priceRange: { min: number; max: number },
+  cheapestTotalCents: number,
 ): ValueScore {
   const { config } = e;
-  const span = priceRange.max - priceRange.min;
-  const price = span <= 0 ? 100 : clamp(100 * (1 - (e.totalCents - priceRange.min) / span));
+  const price = e.totalCents <= 0 ? 100 : clamp((100 * cheapestTotalCents) / e.totalCents);
 
   const preferred = req.resorts.preferredResortIds;
   const preferredTiers = new Set(

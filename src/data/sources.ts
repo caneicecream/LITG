@@ -54,13 +54,33 @@ export function splitEntries(entries: UserPriceEntry[]): Partial<PriceData> {
         out.promotions.push(promo);
         break;
       }
+      case "ticket_rule":
+        out.ticketRules.push(e);
+        break;
+      case "point_chart":
+        out.pointCharts.push(e);
+        break;
+      case "point_cost":
+        out.pointCosts.push(e);
+        break;
     }
   }
   return out;
 }
 
 export function emptyPriceData(): PriceData {
-  return { roomRates: [], ticketPrices: [], diningPlanPrices: [], stayQuotes: [], transport: [], taxRates: [], promotions: [] };
+  return {
+    roomRates: [],
+    ticketPrices: [],
+    diningPlanPrices: [],
+    stayQuotes: [],
+    transport: [],
+    taxRates: [],
+    promotions: [],
+    ticketRules: [],
+    pointCharts: [],
+    pointCosts: [],
+  };
 }
 
 export function mergePriceData(parts: Partial<PriceData>[]): PriceData {

@@ -1,6 +1,6 @@
 import { addDays, daysBetween, todayIso } from "../dates";
 import { formatCents, type Cents } from "../money";
-import { STATUS_LABEL } from "../provenance";
+import { STATUS_LABEL, STATUS_RANK } from "../provenance";
 import { priceConfiguration, type PricingContext } from "../pricing/calculate";
 import type { ResolveOptions } from "../pricing/resolve";
 import type {
@@ -18,6 +18,7 @@ import type {
   TicketOption,
   TripRequest,
 } from "../types";
+import { createBounder, type Bound } from "./bound";
 import { checkHardConstraints } from "./constraints";
 import { compareByCost, compareByValue, differencesFromPreferred, valueScore, WEIGHT_LABEL } from "./scoring";
 
@@ -28,6 +29,12 @@ export interface OptimizeInput {
   now?: Date;
   /** Configuration ids to return in `included` even if they fall outside the ranked list. */
   include?: string[];
+  /**
+   * Skip pricing configurations whose lower bound proves they cannot appear in
+   * any result (default true). Results are identical either way; only `stats`
+   * differ. Tests compare both modes.
+   */
+  prune?: boolean;
 }
 
 const RANKED_LIMIT = 50;
@@ -57,10 +64,12 @@ export function enumerateConfigurations(catalog: Catalog, req: TripRequest): Con
           for (const ticketOption of ticketOptions) {
             for (const dining of diningChoices) {
               const methods: BookingMethod[] = [];
-              // Dining plans and packages require tickets and a Disney resort.
-              const packageable = ticketOption !== null && resort.onProperty;
+              // Dining plans and packages require tickets and a Disney-owned resort.
+              const packageable = ticketOption !== null && resort.disneyOwned;
               if (dining === "out_of_pocket") methods.push("separate");
               if (packageable) methods.push("package");
+              // DVC villas can also be reserved with points (no dining plan or package).
+              if (dining === "out_of_pocket" && resort.dvcPoints && req.resorts.considerPoints) methods.push("points");
               for (const bookingMethod of methods) {
                 out.push({ arrival, nights, resortId: resort.id, roomTypeId: room.id, ticketOption, bookingMethod, dining });
               }
@@ -110,7 +119,7 @@ function evaluate(config: Configuration, resort: Resort, ctx: PricingContext): E
     resortName: resort.name,
     roomName: room.name,
     ...priced,
-    violations: checkHardConstraints(config, resort, req),
+    violations: [...checkHardConstraints(config, resort, req), ...priced.violations],
     budget: {
       overTargetCents: targetCents === undefined ? null : priced.totalCents - targetCents,
       withinHardLimit:
@@ -131,27 +140,32 @@ function evaluate(config: Configuration, resort: Resort, ctx: PricingContext): E
   };
 }
 
+/** Configurations that differ only in "separate" vs "package" booking are priced (and pruned) together. */
+function groupKey(c: Configuration): string {
+  if (c.bookingMethod === "points") return configId(c);
+  return [c.arrival, c.nights, c.resortId, c.roomTypeId, c.ticketOption ?? "none", c.dining].join("|");
+}
+
 /**
- * For the same trip (dates, room, tickets, dining), keep only the better of
- * "separate" vs "package", and record what the other method would cost.
- * Ties go to "separate" (more flexible: tickets and room can be changed independently).
- * Options are only collapsed within the same trust class, so a cheaper
- * illustrative price can never hide a real quote.
+ * Within one group, keep only the better of "separate" vs "package", and record
+ * what the other method would cost. Ties go to "separate" (more flexible: tickets
+ * and room can be changed independently). Options are only collapsed within the
+ * same trust class, so a cheaper illustrative price can never hide a real quote.
  */
-function collapseBookingMethods(evals: Evaluation[]): Evaluation[] {
-  const groups = new Map<string, Evaluation[]>();
+function collapseGroup(evals: Evaluation[]): Evaluation[] {
+  const byClass = new Map<string, Evaluation[]>();
   for (const e of evals) {
-    const { bookingMethod: _m, ...rest } = e.config;
-    const key = JSON.stringify(rest) + (e.containsIllustrative ? "|demo" : "|real");
-    const g = groups.get(key);
-    if (g) g.push(e);
-    else groups.set(key, [e]);
+    const k = e.containsIllustrative ? "demo" : "real";
+    byClass.set(k, [...(byClass.get(k) ?? []), e]);
   }
   const out: Evaluation[] = [];
-  for (const g of groups.values()) {
+  for (const g of byClass.values()) {
+    // Complete beats incomplete; between incomplete options, fewer missing prices
+    // beats a lower partial total (a partial total understates the real cost).
     g.sort(
       (a, b) =>
         Number(b.complete) - Number(a.complete) ||
+        a.missing.length - b.missing.length ||
         a.totalCents - b.totalCents ||
         (a.config.bookingMethod === "separate" ? -1 : 1),
     );
@@ -164,7 +178,7 @@ function collapseBookingMethods(evals: Evaluation[]): Evaluation[] {
 
 const BUCKETS: { label: string; categories: CostCategory[] }[] = [
   { label: "Package quote", categories: ["package"] },
-  { label: "Lodging", categories: ["room", "room_tax"] },
+  { label: "Lodging", categories: ["room", "room_tax", "fees"] },
   { label: "Discounts", categories: ["discount"] },
   { label: "Tickets", categories: ["tickets", "ticket_tax"] },
   { label: "Dining", categories: ["dining", "dining_tax"] },
@@ -181,7 +195,13 @@ export function bucketDeltas(e: Evaluation, base: Evaluation): { label: string; 
     .sort((a, b) => Math.abs(b.deltaCents) - Math.abs(a.deltaCents));
 }
 
-function computeSavings(e: Evaluation, base: Evaluation): Savings {
+/** The cancellation cost of switching away from the baseline, when it is an existing reservation. */
+interface Switching {
+  penaltyCents: Cents | null;
+  note: string;
+}
+
+function computeSavings(e: Evaluation, base: Evaluation, switching: Switching | null): Savings {
   const likeForLike =
     e.config.nights === base.config.nights &&
     e.config.ticketOption === base.config.ticketOption &&
@@ -190,15 +210,52 @@ function computeSavings(e: Evaluation, base: Evaluation): Savings {
   if (e.config.nights !== base.config.nights) diffs.push(`${e.config.nights} vs ${base.config.nights} nights`);
   if (e.config.ticketOption !== base.config.ticketOption) diffs.push("different ticket type");
   if (e.config.dining !== base.config.dining) diffs.push("different dining choice");
+  const savingsCents = base.totalCents - e.totalCents;
   return {
     baselineTotalCents: base.totalCents,
-    savingsCents: base.totalCents - e.totalCents,
+    savingsCents,
     likeForLike,
     basis: likeForLike
       ? "Same nights, park days, ticket type and dining as your preferred plan"
       : `Not like-for-like (${diffs.join(", ")})${e.config.nights !== base.config.nights ? "; compare per-night costs too" : ""}`,
     perNightDeltaCents: base.perNightCents - e.perNightCents,
+    switching: switching && {
+      penaltyCents: switching.penaltyCents,
+      netSavingsCents: switching.penaltyCents === null ? null : savingsCents - switching.penaltyCents,
+      note: switching.note,
+    },
   };
+}
+
+/** Keeps the best `k` items under a comparator; exposes the current k-th (worst kept) item. */
+class TopK<T> {
+  private items: T[] = [];
+  constructor(
+    private readonly k: number,
+    private readonly cmp: (a: T, b: T) => number,
+  ) {}
+  add(x: T) {
+    if (this.items.length === this.k && this.cmp(x, this.items[this.k - 1]!) >= 0) return;
+    let i = this.items.length;
+    while (i > 0 && this.cmp(x, this.items[i - 1]!) < 0) i--;
+    this.items.splice(i, 0, x);
+    if (this.items.length > this.k) this.items.pop();
+  }
+  get full() {
+    return this.items.length >= this.k;
+  }
+  get worst(): T | undefined {
+    return this.items[this.items.length - 1];
+  }
+}
+
+type TrustClass = "real" | "demo";
+
+/** Math.min over an array without spreading it (large arrays overflow the call stack). */
+function minOf(xs: readonly number[]): number {
+  let m = Infinity;
+  for (const x of xs) if (x < m) m = x;
+  return m;
 }
 
 export function optimize(input: OptimizeInput): OptimizationResult {
@@ -213,21 +270,167 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   const ctx: PricingContext = { catalog, data, request: req, opts, bookingDate: req.bookingDate ?? today };
   const resortById = new Map(catalog.resorts.map((r) => [r.id, r]));
   const notices: string[] = [];
+  const byCost = compareByCost(req);
+  const byValue = compareByValue(req);
+  const hardLimit = req.budget.hardLimitCents;
 
   // 1. Enumerate and filter by hard constraints (cheap) before pricing (more expensive).
   const configs = enumerateConfigurations(catalog, req);
   const reasonCounts = new Map<string, number>();
+  const countReason = (r: string) => reasonCounts.set(r, (reasonCounts.get(r) ?? 0) + 1);
   const feasible: Configuration[] = [];
   for (const c of configs) {
     const v = checkHardConstraints(c, resortById.get(c.resortId)!, req);
     if (v.length === 0) feasible.push(c);
-    else for (const r of v) reasonCounts.set(r, (reasonCounts.get(r) ?? 0) + 1);
+    else v.forEach(countReason);
   }
 
-  // 2. Price every feasible configuration, then collapse package vs separate.
-  const evaluated = collapseBookingMethods(feasible.map((c) => evaluate(c, resortById.get(c.resortId)!, ctx)));
+  // 2. The baseline (the user's preferred plan) is priced first: savings and the
+  //    best-alternative bound depend on it.
+  let baseline: Evaluation | null = null;
+  let baselineNote: string | null = null;
+  const b = baselineConfiguration(req);
+  if ("missing" in b) {
+    baselineNote = `Set your preferred ${b.missing.join(", ")} to measure savings against your own plan.`;
+  } else {
+    const resort = resortById.get(b.config.resortId);
+    const room = resort?.roomTypes.find((r) => r.id === b.config.roomTypeId);
+    if (!resort || !room) baselineNote = "Your preferred resort or room is not in the catalog.";
+    else baseline = evaluate(b.config, resort, ctx);
+  }
+  const baselineComplete = baseline?.complete ? baseline : null;
+  const baselineClass: TrustClass | null = baselineComplete ? (baselineComplete.containsIllustrative ? "demo" : "real") : null;
 
-  // 3. Partition: only complete, within-hard-limit results are comparable. If any
+  // 3. Group, bound, and price in order of lower bound, skipping groups that
+  //    provably cannot change any result (see docs/ARCHITECTURE.md, "Pruning").
+  const prune = input.prune ?? true;
+  const bounder = createBounder(ctx);
+  const forced = new Set(input.include ?? []);
+  const groupMap = new Map<string, Configuration[]>();
+  for (const c of feasible) {
+    const k = groupKey(c);
+    const g = groupMap.get(k);
+    if (g) g.push(c);
+    else groupMap.set(k, [c]);
+  }
+  interface Group extends Bound {
+    key: string;
+    configs: Configuration[];
+    forced: boolean;
+  }
+  const groups: Group[] = [...groupMap.entries()].map(([key, cs]) => {
+    const bounds = cs.map((c) => bounder(c, resortById.get(c.resortId)!));
+    return {
+      key,
+      configs: cs,
+      forced: cs.some((c) => forced.has(configId(c))),
+      lb: minOf(bounds.map((x) => x.lb)),
+      quoted: bounds.some((x) => x.quoted),
+      mayBeComplete: bounds.some((x) => x.mayBeComplete),
+      mayBeIncomplete: bounds.some((x) => x.mayBeIncomplete),
+      mayBeIllustrative: bounds.some((x) => x.mayBeIllustrative),
+      mayBeReal: bounds.some((x) => x.mayBeReal),
+    };
+  });
+  groups.sort((a, b) => a.lb - b.lb || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+
+  // Trackers for every output a configuration could enter.
+  const costK = req.objective === "lowest_cost" ? RANKED_LIMIT : EXCLUDED_LIMIT;
+  const valueK = req.objective === "best_value" ? RANKED_LIMIT : 1;
+  const costTop: Record<TrustClass, TopK<Evaluation>> = { real: new TopK(costK, byCost), demo: new TopK(costK, byCost) };
+  const valueTop: Record<TrustClass, TopK<number>> = { real: new TopK(valueK, (a, b) => b - a), demo: new TopK(valueK, (a, b) => b - a) };
+  const cellMin: Record<TrustClass, Map<string, number>> = { real: new Map(), demo: new Map() };
+  const classMin: Record<TrustClass, number> = { real: Infinity, demo: Infinity };
+  const incompleteTop = new TopK<Evaluation>(EXCLUDED_LIMIT, byCost);
+  const overTop = new TopK<Evaluation>(EXCLUDED_LIMIT, byCost);
+  let bestAltTotal = Infinity;
+  // Lower bound on the final cheapest comparable total (for conservative value scores).
+  const unquotedMinLb = minOf(groups.filter((g) => !g.quoted).map((g) => g.lb));
+  let floorMin = Infinity;
+  const pendingValue: { cls: TrustClass; e: Evaluation }[] = [];
+  const classOf = (e: Evaluation): TrustClass => (e.containsIllustrative ? "demo" : "real");
+  const round1 = (x: number) => Math.round(x * 10) / 10;
+
+  const record = (e: Evaluation) => {
+    if (e.budget.withinHardLimit === false) return overTop.add(e);
+    if (!e.complete) return incompleteTop.add(e);
+    const cls = classOf(e);
+    costTop[cls].add(e);
+    const cell = `${e.config.arrival}|${e.config.nights}`;
+    cellMin[cls].set(cell, Math.min(cellMin[cls].get(cell) ?? Infinity, e.totalCents));
+    classMin[cls] = Math.min(classMin[cls], e.totalCents);
+    if (e.savings?.likeForLike && cls === baselineClass && e.totalCents < baselineComplete!.totalCents) {
+      bestAltTotal = Math.min(bestAltTotal, e.totalCents);
+    }
+    if (floorMin === Infinity) pendingValue.push({ cls, e });
+    else valueTop[cls].add(valueScore(e, resortById.get(e.config.resortId)!, req, catalog, floorMin).total);
+  };
+
+  const mustPrice = (g: Group): boolean => {
+    if (!prune || g.quoted || g.forced) return true;
+    const c0 = g.configs[0]!;
+    const cell = `${c0.arrival}|${c0.nights}`;
+    const resort = resortById.get(c0.resortId)!;
+    const classes: TrustClass[] = [];
+    if (g.mayBeReal) classes.push("real");
+    if (g.mayBeIllustrative) classes.push("demo");
+    const withinLimit = hardLimit === undefined || g.lb <= hardLimit;
+    if (g.mayBeComplete && withinLimit) {
+      const likeForLike =
+        baselineComplete !== null &&
+        c0.nights === baselineComplete.config.nights &&
+        c0.ticketOption === baselineComplete.config.ticketOption &&
+        c0.dining === baselineComplete.config.dining;
+      for (const cls of classes) {
+        const ct = costTop[cls];
+        if (!ct.full || g.lb <= ct.worst!.totalCents) return true;
+        const cm = cellMin[cls].get(cell);
+        if (cm === undefined || g.lb <= cm) return true;
+        const vt = valueTop[cls];
+        if (!vt.full || floorMin === Infinity) return true;
+        const ub = valueScore({ config: c0, totalCents: g.lb }, resort, req, catalog, classMin[cls]).total;
+        if (round1(ub) >= vt.worst!) return true;
+        if (likeForLike && cls === baselineClass && g.lb < baselineComplete!.totalCents && g.lb <= bestAltTotal) return true;
+      }
+    }
+    if (g.mayBeIncomplete && withinLimit && (!incompleteTop.full || g.lb <= incompleteTop.worst!.totalCents)) return true;
+    if (hardLimit !== undefined && (!overTop.full || g.lb <= overTop.worst!.totalCents)) return true;
+    return false;
+  };
+
+  const evaluated: Evaluation[] = [];
+  let priced = 0;
+  let pruned = 0;
+  const switching = switchingCost(baseline, data);
+  for (const g of groups) {
+    if (floorMin === Infinity && !g.quoted) {
+      // All quoted groups (lb = −∞) come first; their totals are now known.
+      floorMin = Math.min(unquotedMinLb, minOf(evaluated.filter((e) => e.complete).map((e) => e.totalCents)));
+      for (const { cls, e } of pendingValue.splice(0)) {
+        valueTop[cls].add(valueScore(e, resortById.get(e.config.resortId)!, req, catalog, floorMin).total);
+      }
+    }
+    if (!mustPrice(g)) {
+      pruned += g.configs.length;
+      continue;
+    }
+    priced += g.configs.length;
+    const evals = g.configs.map((c) => evaluate(c, resortById.get(c.resortId)!, ctx));
+    const ok = evals.filter((e) => {
+      if (e.violations.length === 0) return true;
+      e.violations.forEach(countReason);
+      return false;
+    });
+    for (const w of collapseGroup(ok)) {
+      if (baselineComplete && w.complete && baselineComplete.containsIllustrative === w.containsIllustrative) {
+        w.savings = computeSavings(w, baselineComplete, switching);
+      }
+      evaluated.push(w);
+      record(w);
+    }
+  }
+
+  // 4. Partition: only complete, within-hard-limit results are comparable. If any
   //    comparable result uses no illustrative data, illustrative ones are set aside
   //    so demo prices are never ranked alongside real ones.
   const complete = evaluated.filter((e) => e.complete);
@@ -237,50 +440,31 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   const demoMode = pool.some((e) => e.containsIllustrative);
   const setAsideIllustrative = real.length > 0 ? comparable.filter((e) => e.containsIllustrative) : [];
 
-  // 4. Value scores (relative to the pool's price range).
-  const totals = pool.map((e) => e.totalCents);
-  const priceRange = { min: Math.min(...totals), max: Math.max(...totals) };
-  for (const e of complete) {
-    e.valueScore = valueScore(e, resortById.get(e.config.resortId)!, req, catalog, priceRange);
-  }
+  // 5. Value scores, relative to the cheapest option in the pool.
+  const cheapestTotal = pool.length ? minOf(pool.map((e) => e.totalCents)) : 0;
+  for (const e of complete) e.valueScore = valueScore(e, resortById.get(e.config.resortId)!, req, catalog, cheapestTotal);
 
-  // 5. Baseline (the user's preferred plan) and savings.
-  let baseline: Evaluation | null = null;
-  let baselineNote: string | null = null;
-  const b = baselineConfiguration(req);
-  if ("missing" in b) {
-    baselineNote = `Set your preferred ${b.missing.join(", ")} to measure savings against your own plan.`;
-  } else {
-    const resort = resortById.get(b.config.resortId);
-    const room = resort?.roomTypes.find((r) => r.id === b.config.roomTypeId);
-    if (!resort || !room) {
-      baselineNote = "Your preferred resort or room is not in the catalog.";
-    } else {
-      baseline = evaluate(b.config, resort, ctx);
-      if (baseline.complete) {
-        baseline.valueScore = valueScore(baseline, resort, req, catalog, priceRange);
-        if (baseline.violations.length > 0) {
-          baselineNote = `Note: your preferred plan breaks your own requirements (${baseline.violations.join("; ")}).`;
-        }
-      } else {
-        baselineNote = `Your preferred plan could not be fully priced (${baseline.missing.join("; ")}), so savings cannot be calculated.`;
+  if (baseline) {
+    if (baseline.complete) {
+      baseline.valueScore = valueScore(baseline, resortById.get(baseline.config.resortId)!, req, catalog, cheapestTotal);
+      if (baseline.violations.length > 0) {
+        baselineNote = `Note: your preferred plan breaks your own requirements (${baseline.violations.join("; ")}).`;
       }
+    } else {
+      baselineNote = `Your preferred plan could not be fully priced (${baseline.missing.join("; ")}), so savings cannot be calculated.`;
     }
   }
   const savingsComparable = (e: Evaluation) =>
-    baseline !== null && baseline.complete && e.complete && baseline.containsIllustrative === e.containsIllustrative;
-  for (const e of [...complete]) if (savingsComparable(e)) e.savings = computeSavings(e, baseline!);
-  if (baseline?.complete && pool.length > 0 && baseline.containsIllustrative !== demoMode) {
+    baselineComplete !== null && e.complete && baselineComplete.containsIllustrative === e.containsIllustrative;
+  if (baselineComplete && pool.length > 0 && baselineComplete.containsIllustrative !== demoMode) {
     notices.push(
-      baseline.containsIllustrative
+      baselineComplete.containsIllustrative
         ? "Your preferred plan is priced with illustrative data while the ranked options use real prices, so savings are not calculated."
         : "Your preferred plan uses real prices but the ranked options are illustrative, so savings are not calculated.",
     );
   }
 
   // 6. Awards.
-  const byCost = compareByCost(req);
-  const byValue = compareByValue(req);
   const awards: Award[] = [];
   const priceLabel = demoMode ? " (illustrative prices)" : "";
   const sortedByCost = [...pool].sort(byCost);
@@ -292,7 +476,7 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   }
   const cheapest = canCompare ? sortedByCost[0] : undefined;
   if (cheapest) {
-    const why = [`Lowest total of ${pool.length} fully priced option${pool.length === 1 ? "" : "s"}: ${formatCents(cheapest.totalCents)}${priceLabel}.`];
+    const why = [`Lowest total among the fully priced options: ${formatCents(cheapest.totalCents)}${priceLabel}.`];
     if (cheapest.savings && baseline) why.push(...savingsExplanation(cheapest, baseline));
     if (cheapest.appliedPromotion) why.push(`Includes ${cheapest.appliedPromotion.name} (−${formatCents(cheapest.appliedPromotion.savingsCents)}).`);
     awards.push({ kind: "cheapest", evaluationId: cheapest.id, explanation: why });
@@ -313,15 +497,24 @@ export function optimize(input: OptimizeInput): OptimizationResult {
     }
     awards.push({ kind: "best_value", evaluationId: bestValue.id, explanation: why });
   }
-  if (baseline?.complete) {
-    const alt = sortedByCost.find((e) => e.id !== baseline!.id && e.savings?.likeForLike && e.savings.savingsCents > 0);
-    if (alt) {
+  if (baselineComplete) {
+    const alt = sortedByCost.find((e) => e.id !== baselineComplete.id && e.savings?.likeForLike && e.savings.savingsCents > 0);
+    const net = alt?.savings?.switching;
+    if (alt && net && (net.netSavingsCents === null || net.netSavingsCents <= 0)) {
+      // The plan is an existing reservation: a cheaper option is only a saving after cancellation costs.
+      notices.push(
+        net.netSavingsCents === null
+          ? `A like-for-like option is ${formatCents(alt.savings!.savingsCents)} cheaper than your existing reservation, but its cancellation cost is unknown, so no net saving can be confirmed. ${net.note}`
+          : `A like-for-like option is ${formatCents(alt.savings!.savingsCents)} cheaper than your existing reservation, but cancelling would cost ${formatCents(net.penaltyCents!)}, so switching would not save money.`,
+      );
+    } else if (alt) {
       awards.push({
         kind: "best_alternative",
         evaluationId: alt.id,
         explanation: [
           `Same length of stay, tickets and dining as your plan, for ${formatCents(alt.savings!.savingsCents)} less${priceLabel}.`,
-          ...savingsExplanation(alt, baseline),
+          ...(net ? [`After the ${formatCents(net.penaltyCents!)} cost of cancelling your existing reservation, the net saving is ${formatCents(net.netSavingsCents!)}.`] : []),
+          ...savingsExplanation(alt, baselineComplete),
         ],
       });
     } else if (pool.some(savingsComparable)) {
@@ -354,33 +547,36 @@ export function optimize(input: OptimizeInput): OptimizationResult {
     if (!matrix.has(k)) matrix.set(k, { arrival: e.config.arrival, nights: e.config.nights, totalCents: e.totalCents, evaluationId: e.id });
   }
 
-  // 9. Notices.
+  // 9. Notices (phrased from the outputs, which are identical with or without pruning).
   if (demoMode) {
     notices.unshift("These results are based on ILLUSTRATIVE demo prices. They show how the optimizer works and are not real offers.");
   }
-  const realOverLimit = complete.filter((e) => !e.containsIllustrative && e.budget.withinHardLimit === false).length;
-  if (demoMode && realOverLimit > 0) {
-    notices.push(`${realOverLimit} option(s) priced with your real quotes exceed your hard limit (see “Over your hard limit”), so only illustrative options remain below it.`);
+  if (demoMode && excluded.overHardLimit.some((e) => !e.containsIllustrative)) {
+    notices.push("Some options priced with your real quotes exceed your hard limit (see “Over your hard limit”), so only illustrative options remain below it.");
   }
-  if (setAsideIllustrative.length > 0) {
-    notices.push(`${setAsideIllustrative.length} option(s) priced with illustrative data were set aside so they are not compared with real prices.`);
+  if (excluded.illustrative.length > 0) {
+    notices.push("Options priced with illustrative data were set aside so they are not compared with real prices.");
   }
   if (pool.length === 0) {
-    if (req.budget.hardLimitCents !== undefined && excluded.overHardLimit.length > 0) {
-      notices.push(`No fully priced option fits your hard limit of ${formatCents(req.budget.hardLimitCents)}. The least expensive options over the limit are listed below.`);
+    if (hardLimit !== undefined && excluded.overHardLimit.length > 0) {
+      notices.push(`No fully priced option fits your hard limit of ${formatCents(hardLimit)}. The least expensive options over the limit are listed below.`);
     } else if (excluded.incomplete.length > 0) {
       notices.push("No option could be fully priced. Add quotes or prices on the Price data page, or include illustrative data.");
-    } else if (feasible.length === 0) {
+    } else if (feasible.length === 0 || evaluated.length === 0) {
       notices.push("No configuration satisfies all of your hard requirements. See the reasons below.");
     }
   }
-  const potential = pool.filter((e) => e.potentialPromotions.length > 0).length;
+  const potential = ranked.filter((e) => e.potentialPromotions.length > 0).length;
   if (potential > 0) {
-    notices.push(`${potential} of ${pool.length} comparable option(s) might qualify for additional offers if you confirm eligibility (e.g. residency). Those offers are not included in any total; see an option's details.`);
+    notices.push(`${potential} of the ${ranked.length} ranked option(s) might qualify for additional offers if you confirm eligibility (e.g. residency). Those offers are not included in any total; see an option's details.`);
   }
-  const staleCount = pool.filter((e) => Object.keys(e.statusTotals).includes("stale")).length;
+  const staleCount = ranked.filter((e) => Object.keys(e.statusTotals).includes("stale")).length;
   if (staleCount > 0) {
-    notices.push(`${staleCount} ranked option(s) use prices older than ${req.data.staleAfterDays} days (${STATUS_LABEL.stale}). Re-check them before booking.`);
+    notices.push(`${staleCount} ranked option(s) use prices older than ${req.data.staleAfterDays} days (${STATUS_LABEL.stale}). Re-check them on the Price data page before booking.`);
+  }
+  const unknownUsage = ranked.filter((e) => e.ticketUsability?.status === "unknown").length;
+  if (unknownUsage > 0) {
+    notices.push(`${unknownUsage} ranked option(s) use tickets whose usage rules (e.g. how many days you have to use them) are not recorded. Check the ticket terms before buying.`);
   }
 
   return {
@@ -392,7 +588,7 @@ export function optimize(input: OptimizeInput): OptimizationResult {
     baseline,
     baselineNote,
     excluded,
-    included: evaluated.filter((e) => input.include?.includes(e.id)),
+    included: evaluated.filter((e) => forced.has(e.id)),
     dateMatrix: [...matrix.values()].sort((a, b) => (a.arrival < b.arrival ? -1 : a.arrival > b.arrival ? 1 : a.nights - b.nights)),
     stats: {
       candidates: configs.length,
@@ -401,12 +597,24 @@ export function optimize(input: OptimizeInput): OptimizationResult {
         .map(([reason, count]) => ({ reason, count }))
         .sort((a, b) => b.count - a.count)
         .slice(0, 8),
-      priced: evaluated.length,
+      priced,
+      pruned,
       complete: complete.length,
       comparable: pool.length,
     },
     notices,
   };
+}
+
+/** If the baseline is priced from a reservation the user already holds, what would cancelling it cost today? */
+function switchingCost(baseline: Evaluation | null, data: PriceData): Switching | null {
+  if (!baseline?.quoteId) return null;
+  const quote = data.stayQuotes.find((q) => q.id === baseline.quoteId);
+  if (!quote?.booked) return null;
+  if (!baseline.payment) {
+    return { penaltyCents: null, note: "Your reservation's cancellation terms are not recorded." };
+  }
+  return { penaltyCents: baseline.payment.cancellation.penaltyCents, note: baseline.payment.cancellation.note };
 }
 
 function savingsExplanation(e: Evaluation, base: Evaluation): string[] {

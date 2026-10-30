@@ -7,23 +7,31 @@ import type {
   Configuration,
   CostLine,
   DiningPlan,
+  PaymentSummary,
   PotentialPromotion,
   PriceData,
   Promotion,
   PromotionApplication,
+  TicketPrice,
+  TicketUsability,
   TripRequest,
 } from "../types";
+import { summarizePayments } from "./payments";
 import { checkEligibility, roomDiscountForNight } from "./promotions";
 import {
   matchStayQuote,
   resolveDiningNights,
+  resolvePointCost,
+  resolvePointNights,
   resolveRoomNights,
   resolveTaxRate,
   resolveTicket,
+  resolveTicketRule,
   resolveTransport,
   type ResolveOptions,
   type ResolvedNight,
 } from "./resolve";
+import { evaluateTicketUsage } from "./ticketUsage";
 
 export interface PricingContext {
   catalog: Catalog;
@@ -44,6 +52,11 @@ export interface PricedTrip {
   appliedPromotion: PromotionApplication | null;
   potentialPromotions: PotentialPromotion[];
   assumptions: string[];
+  /** Hard problems discovered while pricing (e.g. no ticket usable for the park days). */
+  violations: string[];
+  ticketUsability: TicketUsability | null;
+  payment: PaymentSummary | null;
+  quoteId: string | null;
 }
 
 export const TICKET_LABEL = { base: "Base ticket", park_hopper: "Park Hopper", park_hopper_plus: "Park Hopper Plus" } as const;
@@ -84,6 +97,12 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
   const nights = stayNights(config.arrival, config.nights);
   const parkDays = config.ticketOption ? req.tickets.parkDays : 0;
   const ticketStart = addDays(config.arrival, req.tickets.parkOnArrivalDay ? 0 : 1);
+  const lastParkDate = addDays(config.arrival, config.nights - (req.tickets.parkOnDepartureDay ? 0 : 1));
+  const violations: string[] = [];
+  let ticketUsability: TicketUsability | null = null;
+  let payment: PaymentSummary | null = null;
+  const lodgingJurisdiction = resort.taxJurisdictionId;
+  const jurisdictionName = ctx.catalog.taxJurisdictions.find((j) => j.id === lodgingJurisdiction)?.name ?? lodgingJurisdiction;
 
   // ── Package / room-only quote ──────────────────────────────────────────────
   const quote = matchStayQuote(data, config, party, parkDays, opts);
@@ -92,6 +111,8 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
   let diningFromQuote = false;
   if (quote) {
     const q = quote.item;
+    const taxNote = q.taxIncluded ? "including taxes" : q.taxCents !== undefined ? "before taxes (taxes quoted separately)" : "before taxes";
+    if (q.terms) payment = summarizePayments(q.terms, q.totalCents + (q.taxIncluded ? 0 : (q.taxCents ?? 0)), ctx.bookingDate);
     if (q.bookingMethod === "package") {
       roomFromQuote = ticketsFromQuote = true;
       diningFromQuote = config.dining !== "out_of_pocket";
@@ -104,8 +125,10 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
         amountCents: q.totalCents,
         status: quote.status,
         source: q.provenance.source,
-        calculation: `Quoted total including taxes for ${config.nights} nights: ${parts.join(" + ")} (observed ${q.provenance.observedAt})`,
+        calculation: `Quoted total ${taxNote} for ${config.nights} nights: ${parts.join(" + ")} (observed ${q.provenance.observedAt})`,
       });
+      ticketUsability = evaluateTicketUsage(q.ticket!.usage, q.ticket!.usage ? q.provenance.source : null, ticketStart, parkDays, lastParkDate);
+      if (ticketUsability.status === "violated") violations.push(`Quoted tickets can't cover the park days: ${ticketUsability.reasons.join("; ")}`);
       const included = (key: string, category: CostLine["category"], label: string) =>
         lines.push({
           key,
@@ -122,24 +145,81 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
       if (diningFromQuote) included("dining", "dining", DINING_LABEL[config.dining]);
     } else {
       roomFromQuote = true;
+      const pts = q.points ? ` (${q.points.pointsRequired} points × ${formatCents(q.points.centsPerPoint)})` : "";
       lines.push({
         key: "room",
         category: "room",
-        label: `Room quote: ${q.label}`,
+        label: `${q.bookingMethod === "points" ? "Point-rental quote" : "Room quote"}: ${q.label}`,
         amountCents: q.totalCents,
         status: quote.status,
         source: q.provenance.source,
-        calculation: `Quoted room-only total including taxes for ${config.nights} nights (observed ${q.provenance.observedAt})`,
+        calculation: `Quoted ${q.bookingMethod === "points" ? "point-rental" : "room-only"} total ${taxNote} for ${config.nights} nights${pts} (observed ${q.provenance.observedAt})`,
       });
     }
+    // Taxes on a quote: included, quoted separately, estimated (room-only), or unknown (package).
+    if (!q.taxIncluded) {
+      if (q.taxCents !== undefined) {
+        lines.push({ key: "quote_tax", category: "room_tax", label: "Quoted taxes", amountCents: q.taxCents, status: quote.status, source: q.provenance.source, calculation: "Taxes as shown on the quote" });
+      } else if (q.bookingMethod === "points") {
+        assumptions.push("DVC point reservations are assumed to carry no per-stay lodging tax (it is covered by member dues). Confirm with the rental provider.");
+      } else if (q.bookingMethod === "separate") {
+        const rate = resolveTaxRate(data, "lodging", lodgingJurisdiction, opts);
+        if (!rate) lines.push(unavailable("quote_tax", "room_tax", "Room taxes", `No lodging tax rate for ${jurisdictionName}`));
+        else
+          lines.push({
+            key: "quote_tax",
+            category: "room_tax",
+            label: "Room taxes (estimated on quote)",
+            amountCents: percentOf(q.totalCents, rate.item.ratePct),
+            status: weakestStatus([rate.status, quote.status]),
+            source: rate.item.provenance.source,
+            calculation: `${rate.item.ratePct}% ${jurisdictionName} lodging tax on the pre-tax quote of ${formatCents(q.totalCents)}${resort.taxJurisdictionNote ? ` (${resort.taxJurisdictionNote})` : ""}`,
+          });
+      } else {
+        lines.push(
+          unavailable("quote_tax", "room_tax", "Package taxes", "The package quote excludes tax and no tax amount was entered; taxes can't be split between room and tickets"),
+        );
+      }
+    }
     assumptions.push(
-      "Quoted totals are used exactly as entered (including taxes and any discount already applied at quote time); no further promotions are stacked on a quote.",
+      "Quoted totals are used exactly as entered (including any discount already applied at quote time); no further promotions are stacked on a quote.",
     );
   }
 
   // ── Room from nightly rates ────────────────────────────────────────────────
   let roomNights: ResolvedNight[] = [];
   let roomStatus: PriceStatus = "unavailable";
+  if (!roomFromQuote && config.bookingMethod === "points") {
+    roomFromQuote = true; // priced from points below; no cash rates, taxes or cash promotions apply
+    const pn = resolvePointNights(data, resort.id, room.id, nights, opts);
+    if (pn.missing.length > 0) {
+      lines.push(unavailable("room", "room", `Villa (DVC points): ${room.name}`, `No point chart for ${pn.missing.length} of ${nights.length} nights (first: ${formatShortDate(pn.missing[0]!)})`));
+    } else {
+      const points = pn.nights.reduce((a, n) => a + n.points, 0);
+      const cost = resolvePointCost(data, resort.id, points, opts);
+      const chartStatus = weakestStatus(pn.nights.map((n) => n.status));
+      if (!cost) {
+        lines.push(unavailable("room", "room", `Villa (DVC points): ${room.name}`, `${points} points needed, but no price per point is recorded for ${resort.name}`));
+      } else {
+        const c = cost.item;
+        lines.push({
+          key: "room",
+          category: "room",
+          label: `Villa (DVC points): ${room.name}`,
+          amountCents: points * c.centsPerPoint,
+          status: weakestStatus([chartStatus, cost.status]),
+          source: uniq([...pn.nights.map((n) => n.source), c.provenance.source]).join("; "),
+          calculation: `${points} points (${nights.length} nights) × ${formatCents(c.centsPerPoint)}/point — ${c.label} (${c.type === "rental" ? "rental" : "your own points"})`,
+        });
+        if (c.feeCents) {
+          lines.push({ key: "points_fee", category: "fees", label: "Reservation fee", amountCents: c.feeCents, status: cost.status, source: c.provenance.source, calculation: `${c.label} fee per reservation` });
+        }
+        if (c.terms) payment = summarizePayments(c.terms, points * c.centsPerPoint + (c.feeCents ?? 0), ctx.bookingDate);
+        else assumptions.push("Payment and cancellation terms for this point rental are not recorded. Point rentals are often non-refundable; check before booking.");
+      }
+    }
+    assumptions.push("DVC point reservations are assumed to carry no per-stay lodging tax (it is covered by member dues). Confirm with the rental provider.");
+  }
   if (!roomFromQuote) {
     const r = resolveRoomNights(data, resort.id, room.id, nights, opts);
     if (r.missing.length > 0) {
@@ -239,8 +319,8 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
     const taxableNights = roomNights.filter((n) => !n.taxIncluded);
     if (taxableNights.length > 0) {
       const taxable = sumCents(taxableNights.map((n) => n.cents - (nightDiscount.get(n.date) ?? 0)));
-      const rate = resolveTaxRate(data, "lodging", opts);
-      if (!rate) lines.push(unavailable("room_tax", "room_tax", "Room taxes", "No lodging tax rate available"));
+      const rate = resolveTaxRate(data, "lodging", lodgingJurisdiction, opts);
+      if (!rate) lines.push(unavailable("room_tax", "room_tax", "Room taxes", `No lodging tax rate for ${jurisdictionName}`));
       else
         lines.push({
           key: "room_tax",
@@ -249,7 +329,7 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
           amountCents: percentOf(taxable, rate.item.ratePct),
           status: weakestStatus([rate.status, roomStatus]),
           source: rate.item.provenance.source,
-          calculation: `${rate.item.ratePct}% of ${formatCents(taxable)} taxable room charges${nightDiscount.size ? " (after discount)" : ""}`,
+          calculation: `${rate.item.ratePct}% ${jurisdictionName} lodging tax on ${formatCents(taxable)} taxable room charges${nightDiscount.size ? " (after discount)" : ""}${resort.taxJurisdictionNote ? ` (${resort.taxJurisdictionNote})` : ""}`,
         });
     }
   }
@@ -262,19 +342,32 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
       { age: "adult", count: party.adults },
       { age: "child", count: party.children },
     ];
+    const usable = (t: TicketPrice): TicketUsability => {
+      if (t.usage) return evaluateTicketUsage(t.usage, t.provenance.source, ticketStart, parkDays, lastParkDate);
+      const rule = resolveTicketRule(data, t.option, t.days, t.channel, opts);
+      return evaluateTicketUsage(rule?.item.usage, rule ? rule.item.provenance.source : null, ticketStart, parkDays, lastParkDate);
+    };
+    const rejected: TicketUsability[] = [];
     const resolved = groups
       .filter((g) => g.count > 0)
       .map((g) => ({
         ...g,
-        price: resolveTicket(data, opt, parkDays, g.age, ticketStart, config.bookingMethod, req.tickets.allowThirdParty, opts),
+        price: resolveTicket(data, opt, parkDays, g.age, ticketStart, config.bookingMethod, req.tickets.allowThirdParty, opts, usable, rejected),
       }));
     const missingAges = resolved.filter((r) => !r.price).map((r) => r.age);
-    if (missingAges.length > 0) {
+    if (missingAges.length > 0 && rejected.length > 0) {
+      // Prices exist, but none of them can be used for these park days.
+      violations.push(`No ${name} can cover ${parkDays} park days from ${formatShortDate(ticketStart)}: ${uniq(rejected.flatMap((u) => u.reasons)).join("; ")}`);
+      lines.push(unavailable("tickets", "tickets", `Tickets: ${name}`, `No usable ${name} for these dates`));
+    } else if (missingAges.length > 0) {
       lines.push(
         unavailable("tickets", "tickets", `Tickets: ${name}`, `No ${missingAges.join("/")} price for a ${name} starting ${formatShortDate(ticketStart)}`),
       );
     } else {
       const priced = resolved.map((r) => ({ ...r, price: r.price! }));
+      // Report the most restrictive usability among the tickets bought.
+      const order = { violated: 0, unknown: 1, ok: 2 } as const;
+      ticketUsability = priced.map((p) => p.price.usability!).sort((a, b) => order[a.status] - order[b.status])[0] ?? null;
       const status = weakestStatus(priced.map((p) => p.price.status));
       const thirdParty = priced.some((p) => p.price.item.channel === "third_party");
       lines.push({
@@ -290,8 +383,8 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
       });
       const taxable = sumCents(priced.filter((p) => !p.price.item.taxIncluded).map((p) => p.count * p.price.item.cents));
       if (taxable > 0) {
-        const rate = resolveTaxRate(data, "sales", opts);
-        if (!rate) lines.push(unavailable("ticket_tax", "ticket_tax", "Ticket sales tax", "No sales tax rate available"));
+        const rate = resolveTaxRate(data, "sales", ctx.catalog.ticketTaxJurisdictionId, opts);
+        if (!rate) lines.push(unavailable("ticket_tax", "ticket_tax", "Ticket sales tax", "No sales tax rate available for ticket purchases"));
         else
           lines.push({
             key: "ticket_tax",
@@ -348,8 +441,8 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
       });
       const taxable = sumCents(all.filter((n) => !n.taxIncluded).map((n) => n.count * n.cents));
       if (taxable > 0) {
-        const rate = resolveTaxRate(data, "sales", opts);
-        if (!rate) lines.push(unavailable("dining_tax", "dining_tax", "Dining plan tax", "No sales tax rate available"));
+        const rate = resolveTaxRate(data, "sales", lodgingJurisdiction, opts);
+        if (!rate) lines.push(unavailable("dining_tax", "dining_tax", "Dining plan tax", `No sales tax rate for ${jurisdictionName}`));
         else
           lines.push({
             key: "dining_tax",
@@ -429,7 +522,7 @@ export function priceConfiguration(config: Configuration, ctx: PricingContext): 
     });
   });
 
-  return summarize(lines, appliedPromotion, potentialPromotions, assumptions);
+  return { ...summarize(lines, appliedPromotion, potentialPromotions, assumptions), violations, ticketUsability, payment, quoteId: quote?.item.id ?? null };
 }
 
 function unavailable(key: string, category: CostLine["category"], label: string, why: string): CostLine {
@@ -441,7 +534,7 @@ function summarize(
   appliedPromotion: PromotionApplication | null,
   potentialPromotions: PotentialPromotion[],
   assumptions: string[],
-): PricedTrip {
+): Omit<PricedTrip, "violations" | "ticketUsability" | "payment" | "quoteId"> {
   const totalCents = sumCents(lines.map((l) => l.amountCents ?? 0));
   const missing = lines.filter((l) => l.amountCents === null).map((l) => `${l.label}: ${l.calculation}`);
   const material = lines.filter((l) => !l.includedInQuote && l.amountCents !== 0);

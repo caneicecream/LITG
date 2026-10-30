@@ -19,10 +19,12 @@ export const prov = (status: StoredPriceStatus = "manual", observedAt = TODAY, s
 });
 
 export const catalog: Catalog = {
+  taxJurisdictions: [{ id: "test-county", name: "Test County" }],
+  ticketTaxJurisdictionId: "test-county",
   resorts: [
-    { id: "a", name: "Resort A", tier: "value", onProperty: true, convenience: 3, transportNote: "Bus", roomTypes: [{ id: "std", name: "Std A", maxOccupancy: 4 }] },
-    { id: "b", name: "Resort B", tier: "moderate", onProperty: true, convenience: 5, transportNote: "Boat", roomTypes: [{ id: "std", name: "Std B", maxOccupancy: 5 }] },
-    { id: "off", name: "Offsite", tier: "off_property", onProperty: false, convenience: 1, transportNote: "Car", roomTypes: [{ id: "std", name: "Std Off", maxOccupancy: 4 }] },
+    { id: "a", name: "Resort A", tier: "value", disneyOwned: true, accommodation: "hotel", dvcPoints: false, taxJurisdictionId: "test-county", convenience: 3, transportNote: "Bus", roomTypes: [{ id: "std", name: "Std A", maxOccupancy: 4 }] },
+    { id: "b", name: "Resort B", tier: "moderate", disneyOwned: true, accommodation: "hotel", dvcPoints: false, taxJurisdictionId: "test-county", convenience: 5, transportNote: "Boat", roomTypes: [{ id: "std", name: "Std B", maxOccupancy: 5 }] },
+    { id: "off", name: "Offsite", tier: "off_property", disneyOwned: false, accommodation: "hotel", dvcPoints: false, taxJurisdictionId: "test-county", convenience: 1, transportNote: "Car", roomTypes: [{ id: "std", name: "Std Off", maxOccupancy: 4 }] },
   ],
 };
 
@@ -73,6 +75,7 @@ export function quote(over: Partial<StayQuote>): StayQuote {
     ticket: { option: "base", days: 3 },
     dining: "out_of_pocket",
     totalCents: 100_000,
+    taxIncluded: true,
     provenance: prov(),
     ...over,
   };
@@ -111,10 +114,13 @@ export function baseData(over: Partial<PriceData> = {}): PriceData {
       { id: "tr-off", resortId: "off", overnightParkingPerNightCents: 1_000, parkParkingPerParkDayCents: 2_000, noCarPerParkDayCents: 3_000, provenance: prov("estimated") },
     ],
     taxRates: [
-      { id: "tax-l", category: "lodging", ratePct: 10, provenance: prov("estimated") },
-      { id: "tax-s", category: "sales", ratePct: 5, provenance: prov("estimated") },
+      { id: "tax-l", jurisdictionId: "test-county", category: "lodging", ratePct: 10, provenance: prov("estimated") },
+      { id: "tax-s", jurisdictionId: "test-county", category: "sales", ratePct: 5, provenance: prov("estimated") },
     ],
     promotions: [],
+    ticketRules: [],
+    pointCharts: [],
+    pointCosts: [],
     ...over,
   };
 }

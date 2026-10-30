@@ -218,7 +218,8 @@ describe("optimizer", () => {
   it("reports why configurations were infeasible", () => {
     const req = flexible({ dates: { earliestArrival: "2027-02-01", latestDeparture: "2027-02-10", minNights: 3, maxNights: 4 } });
     const res = run(req);
-    expect(res.stats.infeasibleReasons[0]?.reason).toMatch(/Only 2 possible park days for 3 required/);
+    expect(res.stats.infeasibleReasons.find((r) => /Only 2 possible park days for 3 required/.test(r.reason))?.count).toBe(35);
+    expect(res.stats.infeasibleReasons.find((r) => r.reason === "Resort is not in your allowed resorts")?.count).toBe(39);
     expect(res.ranked.every((e) => e.config.nights === 4)).toBe(true);
   });
 });

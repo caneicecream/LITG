@@ -9,7 +9,8 @@
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bench": "vite-node -c vitest.config.ts scripts/bench.ts"
   },
   "dependencies": {
     "next": "^16.4.3",
