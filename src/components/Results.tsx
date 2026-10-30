@@ -8,6 +8,8 @@ import type { Award, Evaluation, OptimizationResult } from "@/domain/types";
 import { Breakdown } from "./Breakdown";
 import { StatusChip } from "./ui";
 
+export const METHOD_LABEL = { separate: "Separate", package: "Package", points: "DVC points" } as const;
+
 const AWARD_LABEL: Record<Award["kind"], string> = {
   cheapest: "Cheapest",
   best_value: "Best value",
@@ -80,8 +82,11 @@ export function Results({ result, loadDetail }: { result: OptimizationResult; lo
 
       <div className="row small muted">
         <span>
-          Evaluated <b className="num">{stats.candidates.toLocaleString()}</b> configurations · <b className="num">{stats.infeasible.toLocaleString()}</b> broke a requirement ·{" "}
-          <b className="num">{stats.priced.toLocaleString()}</b> priced · <b className="num">{stats.comparable.toLocaleString()}</b> fully priced and comparable
+          Considered <b className="num">{stats.candidates.toLocaleString()}</b> configurations · <b className="num">{stats.infeasible.toLocaleString()}</b> broke a requirement ·{" "}
+          <b className="num">{stats.priced.toLocaleString()}</b> priced in full ·{" "}
+          <span title="Skipped because a lower bound on their cost proves they can't change any result shown here">
+            <b className="num">{stats.pruned.toLocaleString()}</b> skipped (provably can’t change the results)
+          </span>
         </span>
         <span className="spacer" />
         <span>Run {new Date(result.runAt).toLocaleString()}</span>
@@ -194,7 +199,7 @@ export function Results({ result, loadDetail }: { result: OptimizationResult; lo
                       <td className="small">
                         {e.config.ticketOption ? TICKET_LABEL[e.config.ticketOption] : "No tickets"}
                         <div className="muted">
-                          {e.config.bookingMethod === "package" ? "Package" : "Separate"} · {DINING_LABEL[e.config.dining]}
+                          {METHOD_LABEL[e.config.bookingMethod]} · {DINING_LABEL[e.config.dining]}
                         </div>
                         {e.appliedPromotion && <div className="save-pos">−{formatCents(e.appliedPromotion.savingsCents)} offer</div>}
                       </td>
@@ -300,7 +305,7 @@ function Summary({ e }: { e: Evaluation }) {
         {formatShortDate(e.config.arrival)} → {formatShortDate(e.departure)} · {e.config.nights} nights
       </div>
       <div className="muted">
-        {e.config.ticketOption ? TICKET_LABEL[e.config.ticketOption] : "No tickets"} · {e.config.bookingMethod === "package" ? "Package" : "Separate"} ·{" "}
+        {e.config.ticketOption ? TICKET_LABEL[e.config.ticketOption] : "No tickets"} · {METHOD_LABEL[e.config.bookingMethod]} ·{" "}
         {DINING_LABEL[e.config.dining]}
       </div>
     </div>
@@ -338,7 +343,7 @@ function SetAside({ title, note, items }: { title: string; note: string; items: 
                     {e.resortName.replace("Disney's ", "")} <span className="small muted">{e.roomName}</span>
                   </td>
                   <td className="small">
-                    {e.config.ticketOption ? TICKET_LABEL[e.config.ticketOption] : "—"} · {e.config.bookingMethod === "package" ? "Package" : "Separate"} · {DINING_LABEL[e.config.dining]}
+                    {e.config.ticketOption ? TICKET_LABEL[e.config.ticketOption] : "—"} · {METHOD_LABEL[e.config.bookingMethod]} · {DINING_LABEL[e.config.dining]}
                   </td>
                   <td className="r num">
                     {e.complete ? "" : "≥ "}

@@ -34,13 +34,14 @@ export const tripRequestSchema = z
       resortId: z.string().optional(),
       roomTypeId: z.string().optional(),
       ticketOption: ticketOption.optional(),
-      bookingMethod: z.enum(["separate", "package"]).optional(),
+      bookingMethod: z.enum(["separate", "package", "points"]).optional(),
       dining: z.enum(["out_of_pocket", "quick_service_plan", "dining_plan"]).optional(),
     }),
     resorts: z.object({
       allowedResortIds: z.array(z.string()),
       requireOnProperty: z.boolean(),
       preferredResortIds: z.array(z.string()),
+      considerPoints: z.boolean().optional(),
     }),
     tickets: z.object({
       parkDays: z.number().int().min(0).max(10),

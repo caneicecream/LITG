@@ -1,6 +1,7 @@
 "use client";
 
-import { CATALOG } from "@/data/catalog";
+import { Fragment } from "react";
+import { CATALOG, TIER_LABEL } from "@/data/catalog";
 import { DINING_LABEL, TICKET_LABEL } from "@/domain/pricing/calculate";
 import { WEIGHT_LABEL } from "@/domain/optimizer/scoring";
 import { availableParkDays } from "@/domain/optimizer/constraints";
@@ -9,7 +10,7 @@ import { MoneyInput, NumberInput } from "./ui";
 
 type Props = { request: TripRequest; onChange: (r: TripRequest) => void };
 
-const TIER_LABEL = { value: "Value", moderate: "Moderate", deluxe: "Deluxe", off_property: "Off-site" } as const;
+const TIER_ORDER = ["value", "moderate", "deluxe", "deluxe_villa", "partner", "off_property"] as const;
 const TICKETS = Object.keys(TICKET_LABEL) as TicketOption[];
 
 export function TripForm({ request: r, onChange }: Props) {
@@ -117,10 +118,29 @@ export function TripForm({ request: r, onChange }: Props) {
 
       <div className="section">
         <div className="section-title">Resorts</div>
-        <label className="check" style={{ marginBottom: 8 }}>
+        <label className="check" style={{ marginBottom: 4 }}>
           <input type="checkbox" checked={r.resorts.requireOnProperty} onChange={(e) => set("resorts", { requireOnProperty: e.target.checked })} />
-          Must stay at a Disney resort
+          Must stay at a Disney-owned resort
         </label>
+        <label className="check" style={{ marginBottom: 8 }}>
+          <input type="checkbox" checked={!!r.resorts.considerPoints} onChange={(e) => set("resorts", { considerPoints: e.target.checked })} />
+          Also consider DVC villas booked with points
+        </label>
+        <div className="row small" style={{ marginBottom: 6 }}>
+          <button type="button" className="link" onClick={() => set("resorts", { allowedResortIds: [] })}>
+            Allow all
+          </button>
+          {TIER_ORDER.map((t) => (
+            <button
+              key={t}
+              type="button"
+              className="link"
+              onClick={() => set("resorts", { allowedResortIds: CATALOG.resorts.filter((x) => x.tier === t).map((x) => x.id) })}
+            >
+              Only {TIER_LABEL[t]}
+            </button>
+          ))}
+        </div>
         <table className="resort-table">
           <thead>
             <tr>
@@ -130,22 +150,31 @@ export function TripForm({ request: r, onChange }: Props) {
             </tr>
           </thead>
           <tbody>
-            {CATALOG.resorts.map((x) => {
-              const blocked = r.resorts.requireOnProperty && !x.onProperty;
-              return (
-                <tr key={x.id} style={{ opacity: blocked ? 0.45 : 1 }}>
-                  <td>
-                    {x.name.replace("Disney's ", "")} <span className="muted small">{TIER_LABEL[x.tier]}</span>
-                  </td>
-                  <td className="c">
-                    <input type="checkbox" aria-label={`Allow ${x.name}`} checked={isAllowed(x.id) && !blocked} disabled={blocked} onChange={() => toggleAllowed(x.id)} />
-                  </td>
-                  <td className="c">
-                    <input type="checkbox" aria-label={`Prefer ${x.name}`} checked={r.resorts.preferredResortIds.includes(x.id)} onChange={() => togglePreferred(x.id)} />
-                  </td>
+            {TIER_ORDER.map((tier) => (
+              <Fragment key={tier}>
+                <tr>
+                  <th colSpan={3} style={{ paddingTop: 8 }}>
+                    {TIER_LABEL[tier]}
+                  </th>
                 </tr>
-              );
-            })}
+                {CATALOG.resorts
+                  .filter((x) => x.tier === tier)
+                  .map((x) => {
+                    const blocked = r.resorts.requireOnProperty && !x.disneyOwned;
+                    return (
+                      <tr key={x.id} style={{ opacity: blocked ? 0.45 : 1 }}>
+                        <td>{x.name.replace("Disney's ", "").replace("Walt Disney World ", "")}</td>
+                        <td className="c">
+                          <input type="checkbox" aria-label={`Allow ${x.name}`} checked={isAllowed(x.id) && !blocked} disabled={blocked} onChange={() => toggleAllowed(x.id)} />
+                        </td>
+                        <td className="c">
+                          <input type="checkbox" aria-label={`Prefer ${x.name}`} checked={r.resorts.preferredResortIds.includes(x.id)} onChange={() => togglePreferred(x.id)} />
+                        </td>
+                      </tr>
+                    );
+                  })}
+              </Fragment>
+            ))}
           </tbody>
         </table>
         <p className="hint" style={{ marginTop: 6 }}>Allowed is a hard requirement; preferred only affects the best-value score.</p>
@@ -217,10 +246,11 @@ export function TripForm({ request: r, onChange }: Props) {
             <select
               value={r.preferred.dining && r.preferred.dining !== "out_of_pocket" ? "package" : (r.preferred.bookingMethod ?? "separate")}
               disabled={!!r.preferred.dining && r.preferred.dining !== "out_of_pocket"}
-              onChange={(e) => set("preferred", { bookingMethod: e.target.value as "separate" | "package" })}
+              onChange={(e) => set("preferred", { bookingMethod: e.target.value as "separate" | "package" | "points" })}
             >
               <option value="separate">Separately</option>
-              <option value="package">Disney package</option>
+              {prefResort?.disneyOwned !== false && <option value="package">Disney package</option>}
+              {prefResort?.dvcPoints && <option value="points">DVC points</option>}
             </select>
           </label>
         </div>

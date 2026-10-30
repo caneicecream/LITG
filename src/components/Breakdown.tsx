@@ -2,7 +2,8 @@
 
 import { formatCents } from "@/domain/money";
 import { STATUS_LABEL, type PriceStatus } from "@/domain/provenance";
-import type { Evaluation } from "@/domain/types";
+import { formatShortDate } from "@/domain/dates";
+import type { Evaluation, PaymentSummary, TicketUsability } from "@/domain/types";
 import { StatusChip } from "./ui";
 
 const STATUS_ORDER: PriceStatus[] = ["verified", "manual", "stale", "estimated", "illustrative"];
@@ -86,6 +87,9 @@ export function Breakdown({ e }: { e: Evaluation }) {
           )}
         </dl>
 
+        {e.ticketUsability && <TicketUsage u={e.ticketUsability} />}
+        {e.payment && <Payment p={e.payment} />}
+
         {e.savings && (
           <div className="stack" style={{ gap: 4 }}>
             <h3>Compared with your preferred plan</h3>
@@ -100,6 +104,25 @@ export function Breakdown({ e }: { e: Evaluation }) {
               than {formatCents(e.savings.baselineTotalCents)}.
             </p>
             <p className="small muted">{e.savings.basis}.</p>
+            {e.savings.switching && (
+              <p className="small">
+                Your plan is an existing reservation.{" "}
+                {e.savings.switching.penaltyCents === null ? (
+                  <span className="save-neg">Cancelling it has an unknown cost, so no net saving can be confirmed.</span>
+                ) : (
+                  <>
+                    Cancelling it would cost {formatCents(e.savings.switching.penaltyCents)} today, so the net difference is{" "}
+                    <span className={(e.savings.switching.netSavingsCents ?? 0) > 0 ? "save-pos" : "save-neg"}>
+                      {(e.savings.switching.netSavingsCents ?? 0) > 0
+                        ? `${formatCents(e.savings.switching.netSavingsCents!)} saved`
+                        : `${formatCents(-(e.savings.switching.netSavingsCents ?? 0))} lost`}
+                    </span>
+                    .
+                  </>
+                )}{" "}
+                <span className="muted">{e.savings.switching.note}</span>
+              </p>
+            )}
             {!e.savings.likeForLike && (
               <p className="small muted">
                 Per night:{" "}
@@ -173,6 +196,71 @@ export function Breakdown({ e }: { e: Evaluation }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+const USABILITY_TEXT: Record<TicketUsability["status"], string> = {
+  ok: "Usable for all park days",
+  violated: "Can't cover the park days",
+  unknown: "Usage rules not recorded",
+};
+
+function TicketUsage({ u }: { u: TicketUsability }) {
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <h3>Ticket usability</h3>
+      <p className="small">
+        <span className={u.status === "ok" ? "save-pos" : u.status === "violated" ? "save-neg" : undefined}>{USABILITY_TEXT[u.status]}</span>
+        {u.usableDays !== null && u.status !== "unknown" ? ` (${u.usableDays} usable days)` : ""}
+        {u.source ? <span className="muted"> · rule from {u.source}</span> : null}
+      </p>
+      {u.reasons.length > 0 && <p className="small save-neg">{u.reasons.join("; ")}</p>}
+      {u.unknowns.length > 0 && <p className="small muted">Not recorded: {u.unknowns.join(", ")}. Check the ticket terms before buying.</p>}
+      {u.parkReservationRequired && <p className="small">Park reservations are required; availability is not checked here.</p>}
+    </div>
+  );
+}
+
+function Payment({ p }: { p: PaymentSummary }) {
+  const c = p.cancellation;
+  return (
+    <div className="stack" style={{ gap: 4 }}>
+      <h3>Payments and cancellation</h3>
+      <dl className="kv">
+        <dt>Due to book</dt>
+        <dd className="num">{p.dueToBookCents === null ? "Unknown (deposit not recorded)" : formatCents(p.dueToBookCents)}</dd>
+        {p.paidCents > 0 && (
+          <>
+            <dt>Paid so far</dt>
+            <dd className="num">{formatCents(p.paidCents)}</dd>
+            <dt>Balance</dt>
+            <dd className="num">{formatCents(p.balanceCents)}</dd>
+          </>
+        )}
+        <dt>Cancelling on {formatShortDate(c.asOf)}</dt>
+        <dd>
+          {c.penaltyCents === null ? <span className="save-neg">Cost unknown</span> : c.penaltyCents === 0 ? <span className="save-pos">No cost</span> : <span className="save-neg">{formatCents(c.penaltyCents)}</span>}{" "}
+          <span className="small muted">{c.note}</span>
+        </dd>
+      </dl>
+      <table className="lines">
+        <tbody>
+          {p.schedule.map((s, i) => (
+            <tr key={i}>
+              <td className="small">
+                {s.label}
+                {s.state !== "upcoming" && <span className={`chip ${s.state === "paid" ? "chip-manual" : "chip-unavailable"}`} style={{ marginLeft: 6 }}>{s.state}</span>}
+              </td>
+              <td className="small muted">{s.dueDate ? `due ${formatShortDate(s.dueDate)}` : "due at booking / date not recorded"}</td>
+              <td className="num small" style={{ textAlign: "right" }}>
+                {formatCents(s.amountCents)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {p.warnings.length > 0 && <p className="small save-neg">{p.warnings.join(" ")}</p>}
     </div>
   );
 }

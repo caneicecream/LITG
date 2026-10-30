@@ -37,19 +37,44 @@ Acceptance criteria and status:
 | Can tell verified, estimated, manual and illustrative prices apart | ✅ Status chips per line, a per-result status mix, and the demo-mode banner. |
 | No savings claims the data can't support | ✅ Savings only within the same trust class against a fully priced baseline, labelled not-like-for-like where needed. |
 | Flexible dates, budget (soft/hard), hard vs soft preferences, package vs separate, promotions with eligibility, saved trips | ✅ |
-| Tests for the core financial logic | ✅ 66 tests |
+| Tests for the core financial logic | ✅ 66 tests at Milestone 1 (122 after Milestone 2) |
 
-## Milestone 2: better optimization (next)
+## Milestone 2: better optimization (done, 2026-10-30)
 
-Highest value first:
+| Item | Status | Notes |
+| --- | --- | --- |
+| Paste-friendly quote entry | ✅ | `Key: value` text, several quotes per paste. Every essential field is required, with ambiguities and conflicts reported. Review before saving, or open a quote in the full form. |
+| Duplicate quotes | ✅ | Copies into the form with the total and label cleared; the original is preserved. |
+| Bulk ticket-price entry | ✅ | Date/range lines or a CSV/TSV table with per-row ticket, days, age and usage window. All-or-nothing validation, including overlap detection. |
+| Quote freshness ("still current?") | ✅ | Stale review panel; re-check with or without a new price or source. Previous observations are kept in `history` and shown per entry. |
+| Catalog breadth | ✅ | 30 accommodations: Value, Moderate and Deluxe resorts with room views, 7 DVC villa resorts, the Swan and Dolphin as on-site partners, and 3 generic off-property slots (hotel, suite or vacation rental, Disney Springs area). |
+| DVC / rental points | ✅ | A distinct accommodation type and booking method: point charts, cost per point (rental or owned), fees, terms, point-rental quotes. Never collapsed with cash stays. |
+| Per-resort tax jurisdiction | ✅ | Catalog data. Orange vs Osceola rates; unconfirmed assignments are flagged. Quote tax handling is explicit. |
+| Package payments and cancellation | ✅ | Deposit, schedule, balance, due dates, refundability, free-cancellation date, penalty tiers. The amount due is separate from the total, and savings against an existing reservation are net of cancellation cost. |
+| Ticket restrictions | ✅ | Use-within window, expiration, blocked-out dates, park-reservation flag; product rules or per-price. Unknown rules are reported. Unusable tickets are skipped, and trips with no usable ticket are ruled out with a reason. |
+| Known-scenario regression tests | ✅ | `tests/scenarios.test.ts`: 21 hand-checkable scenarios with fictional, labelled quotes. |
+| Performance | ✅ | Measured, then lower-bound pruning with a randomized equivalence proof: wide search 45.4 s → 4.3 s. See ARCHITECTURE.md, *Pruning*. |
 
-1. **More real-data ergonomics:** paste-friendly quote entry, duplicating a quote to tweak dates, bulk ticket-price entry from a published price calendar, and an "is this quote still current?" flow for stale entries.
-2. **Catalog breadth:** more resorts and room views, plus Disney Vacation Club or rental-point stays as a separate accommodation type.
-3. **Per-resort tax jurisdiction** (Orange vs Osceola) as data.
-4. **Package nuances:** deposits, payment schedules, and cancellation terms, needed later for switching-cost math.
-5. **Ticket validity windows** (an N-day ticket used within M days) and date-specific park reservations, if they apply again.
-6. **Known-scenario regression tests** built from saved real quotes.
-7. **Performance guard** for very wide windows (a 120-day window × 14-night range is about 180k configurations, or a few seconds), using pruning by lower bounds.
+Also changed:
+- Best-value price scoring now uses cheapest ÷ total, documented and tested.
+- Ruled-out reasons aggregate allow-list exclusions.
+- Between two incomplete options, the one with fewer missing prices is shown.
+
+**Partly done or deferred, and why**
+
+- *Installment schedules*: modeled, validated and computed, but the forms and paste format only capture the deposit and final balance. Most Disney package quotes have just those two.
+- *Choosing the county for a generic off-property slot*: the slot has a fixed, documented assumption. A tax-inclusive quote is the recommended way to price an off-site stay exactly.
+- *Park-reservation availability*: only the requirement flag is modeled. No legitimate data source exists for availability.
+- *DVC booking windows, banking/borrowing, and dining plans on point stays*: not modeled (rules not verified). Point stays exclude dining plans.
+- *Bulk entry for room rates and point charts*: not done; Milestone 2 asked for bulk ticket prices. The same importer pattern applies.
+- *Pushing to GitHub*: blocked by repository access in this environment. The work is committed locally.
+
+## Next steps (highest value first)
+
+1. Enter real quotes for an actual trip and use them to grow the scenario regression suite.
+2. Installments in the forms; bulk entry for room rates and point charts.
+3. Per-entry tax jurisdiction override for generic off-property slots.
+4. Milestone 3 (AI-assisted planning) on top of the existing `TripRequest` contract.
 
 ## Milestone 3: AI-assisted planning
 

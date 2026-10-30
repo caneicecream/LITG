@@ -73,3 +73,15 @@ describe("request schema", () => {
     expect(res.ok).toBe(false);
   });
 });
+
+describe("request schema (Milestone 2 fields)", () => {
+  it("keeps the DVC points option and accepts a points baseline", () => {
+    const req = { ...baseRequest(), resorts: { ...baseRequest().resorts, considerPoints: true }, preferred: { bookingMethod: "points" } };
+    const res = parseTripRequest(req);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.request.resorts.considerPoints).toBe(true);
+      expect(res.request.preferred.bookingMethod).toBe("points");
+    }
+  });
+});

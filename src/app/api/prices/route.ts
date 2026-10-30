@@ -1,12 +1,22 @@
-import { parsePriceEntry } from "@/data/entrySchema";
-import { addPrice, deletePrice, listPrices } from "@/data/store";
+import { parsePriceEntries, parsePriceEntry } from "@/data/entrySchema";
+import { addPrice, addPrices, deletePrice, listPrices } from "@/data/store";
 
 export async function GET() {
   return Response.json({ entries: await listPrices() });
 }
 
+/** Add one entry (`{...entry}`) or several at once (`{ entries: [...] }`, all-or-nothing). */
 export async function POST(req: Request) {
-  const parsed = parsePriceEntry(await req.json().catch(() => null));
+  const body = await req.json().catch(() => null);
+  if (body && Array.isArray(body.entries)) {
+    if (body.entries.length === 0 || body.entries.length > 500) {
+      return Response.json({ errors: ["Send between 1 and 500 entries"] }, { status: 400 });
+    }
+    const parsed = parsePriceEntries(body.entries);
+    if (!parsed.ok) return Response.json({ errors: parsed.errors }, { status: 400 });
+    return Response.json({ entries: await addPrices(parsed.entries) }, { status: 201 });
+  }
+  const parsed = parsePriceEntry(body);
   if (!parsed.ok) return Response.json({ errors: parsed.errors }, { status: 400 });
   return Response.json({ entry: await addPrice(parsed.entry) }, { status: 201 });
 }
