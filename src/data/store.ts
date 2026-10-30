@@ -19,6 +19,8 @@ export interface RunSnapshot {
   runAt: string;
   demoMode: boolean;
   comparable: number;
+  /** First ranked option (present even when there are too few options for awards). */
+  top?: { evaluationId: string; totalCents: Cents; dataStatus: string };
   cheapest?: { evaluationId: string; totalCents: Cents; dataStatus: string };
   bestValue?: { evaluationId: string; totalCents: Cents; dataStatus: string };
   bestAlternative?: { evaluationId: string; totalCents: Cents; savingsCents: Cents };
@@ -43,12 +45,13 @@ interface StoreFile {
 const MAX_RUNS_PER_TRIP = 50;
 
 function storePath(): string {
-  return process.env.DVO_STORE_PATH ?? path.join(process.cwd(), "data", "local-store.json");
+  // Runtime-only user data: excluded from build-time file tracing.
+  return process.env.DVO_STORE_PATH ?? path.join(/*turbopackIgnore: true*/ process.cwd(), "data", "local-store.json");
 }
 
 async function read(): Promise<StoreFile> {
   try {
-    const raw = await fs.readFile(storePath(), "utf8");
+    const raw = await fs.readFile(/*turbopackIgnore: true*/ storePath(), "utf8");
     const parsed = JSON.parse(raw) as StoreFile;
     return { version: 1, prices: parsed.prices ?? [], trips: parsed.trips ?? [] };
   } catch (err) {
@@ -59,10 +62,10 @@ async function read(): Promise<StoreFile> {
 
 async function write(data: StoreFile): Promise<void> {
   const file = storePath();
-  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.mkdir(/*turbopackIgnore: true*/ path.dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(data, null, 2), "utf8");
-  await fs.rename(tmp, file);
+  await fs.writeFile(/*turbopackIgnore: true*/ tmp, JSON.stringify(data, null, 2), "utf8");
+  await fs.rename(/*turbopackIgnore: true*/ tmp, file);
 }
 
 // Serialize read-modify-write cycles within this process.

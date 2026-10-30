@@ -26,6 +26,8 @@ export interface OptimizeInput {
   data: PriceData;
   request: TripRequest;
   now?: Date;
+  /** Configuration ids to return in `included` even if they fall outside the ranked list. */
+  include?: string[];
 }
 
 const RANKED_LIMIT = 50;
@@ -194,7 +196,7 @@ function computeSavings(e: Evaluation, base: Evaluation): Savings {
     likeForLike,
     basis: likeForLike
       ? "Same nights, park days, ticket type and dining as your preferred plan"
-      : `Not like-for-like (${diffs.join(", ")}); compare per-night costs too`,
+      : `Not like-for-like (${diffs.join(", ")})${e.config.nights !== base.config.nights ? "; compare per-night costs too" : ""}`,
     perNightDeltaCents: base.perNightCents - e.perNightCents,
   };
 }
@@ -282,14 +284,20 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   const awards: Award[] = [];
   const priceLabel = demoMode ? " (illustrative prices)" : "";
   const sortedByCost = [...pool].sort(byCost);
-  const cheapest = sortedByCost[0];
+  // "Cheapest" and "best value" are comparative claims: they need at least two options.
+  // (The best alternative is compared against the user's own plan, so it can stand alone.)
+  const canCompare = pool.length >= 2;
+  if (pool.length === 1) {
+    notices.push("Only one option is fully priced with comparable data, so there is nothing to rank it against yet. Add more quotes or prices to compare.");
+  }
+  const cheapest = canCompare ? sortedByCost[0] : undefined;
   if (cheapest) {
     const why = [`Lowest total of ${pool.length} fully priced option${pool.length === 1 ? "" : "s"}: ${formatCents(cheapest.totalCents)}${priceLabel}.`];
     if (cheapest.savings && baseline) why.push(...savingsExplanation(cheapest, baseline));
     if (cheapest.appliedPromotion) why.push(`Includes ${cheapest.appliedPromotion.name} (−${formatCents(cheapest.appliedPromotion.savingsCents)}).`);
     awards.push({ kind: "cheapest", evaluationId: cheapest.id, explanation: why });
   }
-  const bestValue = [...pool].sort(byValue)[0];
+  const bestValue = canCompare ? [...pool].sort(byValue)[0] : undefined;
   if (bestValue?.valueScore) {
     const top = [...bestValue.valueScore.parts]
       .filter((p) => p.weightPct > 0)
@@ -322,7 +330,11 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   }
 
   // 7. Ranked list and set-aside groups.
-  const ranked = [...pool].sort(req.objective === "best_value" ? byValue : byCost).slice(0, RANKED_LIMIT);
+  // Top N by the chosen objective, plus any award winner that falls outside it.
+  const awardIds = new Set(awards.map((a) => a.evaluationId));
+  const ranked = [...pool]
+    .sort(req.objective === "best_value" ? byValue : byCost)
+    .filter((e, i) => i < RANKED_LIMIT || awardIds.has(e.id));
   const excluded = {
     illustrative: setAsideIllustrative.sort(byCost).slice(0, EXCLUDED_LIMIT),
     incomplete: evaluated
@@ -346,6 +358,10 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   if (demoMode) {
     notices.unshift("These results are based on ILLUSTRATIVE demo prices. They show how the optimizer works and are not real offers.");
   }
+  const realOverLimit = complete.filter((e) => !e.containsIllustrative && e.budget.withinHardLimit === false).length;
+  if (demoMode && realOverLimit > 0) {
+    notices.push(`${realOverLimit} option(s) priced with your real quotes exceed your hard limit (see “Over your hard limit”), so only illustrative options remain below it.`);
+  }
   if (setAsideIllustrative.length > 0) {
     notices.push(`${setAsideIllustrative.length} option(s) priced with illustrative data were set aside so they are not compared with real prices.`);
   }
@@ -360,7 +376,7 @@ export function optimize(input: OptimizeInput): OptimizationResult {
   }
   const potential = pool.filter((e) => e.potentialPromotions.length > 0).length;
   if (potential > 0) {
-    notices.push(`${potential} ranked option(s) might qualify for additional offers if you confirm eligibility (see each option's details). They are not included in totals.`);
+    notices.push(`${potential} of ${pool.length} comparable option(s) might qualify for additional offers if you confirm eligibility (e.g. residency). Those offers are not included in any total; see an option's details.`);
   }
   const staleCount = pool.filter((e) => Object.keys(e.statusTotals).includes("stale")).length;
   if (staleCount > 0) {
@@ -376,6 +392,7 @@ export function optimize(input: OptimizeInput): OptimizationResult {
     baseline,
     baselineNote,
     excluded,
+    included: evaluated.filter((e) => input.include?.includes(e.id)),
     dateMatrix: [...matrix.values()].sort((a, b) => (a.arrival < b.arrival ? -1 : a.arrival > b.arrival ? 1 : a.nights - b.nights)),
     stats: {
       candidates: configs.length,

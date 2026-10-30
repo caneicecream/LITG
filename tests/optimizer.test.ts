@@ -222,3 +222,40 @@ describe("optimizer", () => {
     expect(res.ranked.every((e) => e.config.nights === 4)).toBe(true);
   });
 });
+
+describe("result completeness", () => {
+  it("always returns the evaluations that awards point to, even beyond the ranked limit", () => {
+    // 60+ cheaper same-resort dates, while the best-value option (preferred resort B) is the most expensive.
+    const req = baseRequest({
+      dates: { earliestArrival: "2027-02-01", latestDeparture: "2027-04-30", minNights: 4, maxNights: 4 },
+      resorts: { allowedResortIds: ["a", "b"], requireOnProperty: true, preferredResortIds: ["b"] },
+      weights: { price: 10, resort: 60, convenience: 30, ticket: 0, dining: 0, dates: 0 },
+      preferred: { arrival: "2027-04-26" },
+    });
+    const res = run(req);
+    expect(res.ranked.length).toBeGreaterThan(50);
+    for (const a of res.awards) expect(res.ranked.some((e) => e.id === a.evaluationId)).toBe(true);
+  });
+});
+
+describe("award labels require a real comparison", () => {
+  it("does not label a lone option as cheapest or best value", () => {
+    const req = baseRequest({ resorts: { allowedResortIds: ["a"], requireOnProperty: true, preferredResortIds: [] } });
+    const res = run(req);
+    expect(res.ranked).toHaveLength(1);
+    expect(res.awards).toEqual([]);
+    expect(res.notices.join(" ")).toMatch(/Only one option is fully priced/);
+  });
+});
+
+describe("on-demand detail", () => {
+  it("returns requested evaluations outside the ranked list", () => {
+    const req = flexible({ dates: { earliestArrival: "2027-02-01", latestDeparture: "2027-05-30", minNights: 4, maxNights: 4 } });
+    const full = run(req);
+    const outside = full.dateMatrix.find((d) => !full.ranked.some((e) => e.id === d.evaluationId))!;
+    expect(outside).toBeDefined();
+    const res = optimize({ catalog, data: baseData(), request: req, now: NOW, include: [outside.evaluationId] });
+    expect(res.included.map((e) => e.id)).toEqual([outside.evaluationId]);
+    expect(res.included[0]!.totalCents).toBe(outside.totalCents);
+  });
+});

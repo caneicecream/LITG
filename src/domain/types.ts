@@ -361,6 +361,8 @@ export interface OptimizationResult {
     incomplete: Evaluation[];
     overHardLimit: Evaluation[];
   };
+  /** Evaluations explicitly requested via `include` (e.g. a date picked from the calendar). */
+  included: Evaluation[];
   /** Cheapest comparable total for each (arrival, nights) pair. */
   dateMatrix: { arrival: IsoDate; nights: number; totalCents: Cents; evaluationId: string }[];
   stats: {
