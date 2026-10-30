@@ -34,7 +34,7 @@ export function priceUnit(e: UserPriceEntry): "cents" | "points" | null {
   return priceValue(e) === null ? null : "cents";
 }
 
-function withValue(e: UserPriceEntry, value: number): UserPriceEntry {
+export function withValue(e: UserPriceEntry, value: number): UserPriceEntry {
   switch (e.kind) {
     case "stay_quote":
       return { ...e, totalCents: value };

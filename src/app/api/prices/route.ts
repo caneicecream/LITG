@@ -1,12 +1,13 @@
+import { guarded } from "@/lib/guarded";
 import { parsePriceEntries, parsePriceEntry } from "@/data/entrySchema";
 import { addPrice, addPrices, deletePrice, listPrices } from "@/data/store";
 
-export async function GET() {
+async function handleGET() {
   return Response.json({ entries: await listPrices() });
 }
 
 /** Add one entry (`{...entry}`) or several at once (`{ entries: [...] }`, all-or-nothing). */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = await req.json().catch(() => null);
   if (body && Array.isArray(body.entries)) {
     if (body.entries.length === 0 || body.entries.length > 500) {
@@ -21,8 +22,12 @@ export async function POST(req: Request) {
   return Response.json({ entry: await addPrice(parsed.entry) }, { status: 201 });
 }
 
-export async function DELETE(req: Request) {
+async function handleDELETE(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return Response.json({ errors: ["id is required"] }, { status: 400 });
   return (await deletePrice(id)) ? new Response(null, { status: 204 }) : Response.json({ errors: ["Not found"] }, { status: 404 });
 }
+
+export const GET = guarded(handleGET);
+export const POST = guarded(handlePOST);
+export const DELETE = guarded(handleDELETE);

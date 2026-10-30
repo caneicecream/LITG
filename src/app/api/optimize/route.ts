@@ -1,9 +1,10 @@
+import { guarded } from "@/lib/guarded";
 import { CATALOG } from "@/data/catalog";
 import { loadPriceData } from "@/data/sources";
 import { optimize } from "@/domain/optimizer/optimize";
 import { parseTripRequest } from "@/domain/schema";
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = await req.json().catch(() => null);
   const parsed = parseTripRequest(body);
   if (!parsed.ok) return Response.json({ errors: parsed.errors }, { status: 400 });
@@ -12,3 +13,5 @@ export async function POST(req: Request) {
   const include = new URL(req.url).searchParams.getAll("include").slice(0, 20);
   return Response.json(optimize({ catalog: CATALOG, data, request: parsed.request, include }));
 }
+
+export const POST = guarded(handlePOST);

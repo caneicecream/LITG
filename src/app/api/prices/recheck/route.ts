@@ -1,3 +1,4 @@
+import { guarded } from "@/lib/guarded";
 import { z } from "zod";
 import { isIsoDate, todayIso } from "@/domain/dates";
 import { recheckPrice } from "@/data/store";
@@ -18,7 +19,7 @@ const body = z.object({
  * previous observation is kept in the entry's history; omit `value` when the
  * price is unchanged.
  */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return Response.json({ errors: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   if (parsed.data.observedAt > todayIso()) return Response.json({ errors: ["observedAt: can't be in the future"] }, { status: 400 });
@@ -27,3 +28,5 @@ export async function POST(req: Request) {
   if (!res.ok) return Response.json({ errors: [res.error] }, { status: res.error === "Not found" ? 404 : 400 });
   return Response.json({ entry: res.entry });
 }
+
+export const POST = guarded(handlePOST);

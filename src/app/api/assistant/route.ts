@@ -1,10 +1,11 @@
+import { guarded } from "@/lib/guarded";
 import { z } from "zod";
 import { getProvider } from "@/ai/providers/config";
 import { assistantDeps } from "@/ai/server";
 import { applyProposal, ConversationNotFound, dismissProposal, runRequest, sendMessage, updateSettings } from "@/ai/service";
 
 /** Which assistant mode is active (never exposes keys). */
-export async function GET() {
+async function handleGET() {
   return Response.json(getProvider().status);
 }
 
@@ -16,7 +17,7 @@ const body = z.discriminatedUnion("action", [
   z.object({ action: z.literal("settings"), conversationId: z.string(), autoApply: z.boolean().optional(), title: z.string().max(100).optional() }),
 ]);
 
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const parsed = body.safeParse(await req.json().catch(() => null));
   if (!parsed.success) return Response.json({ errors: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`) }, { status: 400 });
   const deps = assistantDeps();
@@ -38,3 +39,6 @@ export async function POST(req: Request) {
     return Response.json({ errors: [err instanceof Error ? err.message : "Something went wrong"] }, { status: 400 });
   }
 }
+
+export const GET = guarded(handleGET);
+export const POST = guarded(handlePOST);

@@ -1,3 +1,4 @@
+import { guarded } from "@/lib/guarded";
 import { z } from "zod";
 import { CATALOG } from "@/data/catalog";
 import { loadPriceData } from "@/data/sources";
@@ -6,7 +7,7 @@ import { optimize } from "@/domain/optimizer/optimize";
 import { parseTripRequest } from "@/domain/schema";
 import type { OptimizationResult } from "@/domain/types";
 
-export async function GET(req: Request) {
+async function handleGET(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (id) {
     const trip = await getTrip(id);
@@ -18,7 +19,7 @@ export async function GET(req: Request) {
 const saveBody = z.object({ id: z.string().optional(), name: z.string().trim().min(1).max(100), request: z.unknown() });
 
 /** Save a trip. The server re-runs the optimization so the stored snapshot reflects current data. */
-export async function POST(req: Request) {
+async function handlePOST(req: Request) {
   const body = saveBody.safeParse(await req.json().catch(() => null));
   if (!body.success) return Response.json({ errors: body.error.issues.map((i) => i.message) }, { status: 400 });
   const parsed = parseTripRequest(body.data.request);
@@ -29,7 +30,7 @@ export async function POST(req: Request) {
   return Response.json({ trip }, { status: 201 });
 }
 
-export async function DELETE(req: Request) {
+async function handleDELETE(req: Request) {
   const id = new URL(req.url).searchParams.get("id");
   if (!id) return Response.json({ errors: ["id is required"] }, { status: 400 });
   return (await deleteTrip(id)) ? new Response(null, { status: 204 }) : Response.json({ errors: ["Not found"] }, { status: 404 });
@@ -57,3 +58,7 @@ function snapshot(r: OptimizationResult): RunSnapshot {
       r.baseline?.complete && r.baseline.containsIllustrative === r.demoMode ? r.baseline.totalCents : undefined,
   };
 }
+
+export const GET = guarded(handleGET);
+export const POST = guarded(handlePOST);
+export const DELETE = guarded(handleDELETE);
