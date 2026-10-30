@@ -67,7 +67,7 @@ Also changed:
 - *Park-reservation availability*: only the requirement flag is modeled. No legitimate data source exists for availability.
 - *DVC booking windows, banking/borrowing, and dining plans on point stays*: not modeled (rules not verified). Point stays exclude dining plans.
 - *Bulk entry for room rates and point charts*: not done; Milestone 2 asked for bulk ticket prices. The same importer pattern applies.
-- *Pushing to GitHub*: blocked by repository access in this environment. The work is committed locally.
+- *Pushing to GitHub*: was blocked by repository access during Milestone 2; resolved, and all milestones are now pushed.
 
 ## Next steps (highest value first)
 
