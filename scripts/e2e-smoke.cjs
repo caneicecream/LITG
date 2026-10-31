@@ -75,8 +75,16 @@ async function api(path, method, body) {
   const d = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   await d.goto(`${BASE}/itinerary?trip=${trip.id}`, { waitUntil: "networkidle" });
   await d.getByRole("heading", { name: "Your trip" }).waitFor({ timeout: 20000 });
+  // Paste park hours from a calendar (fictional), review, add.
+  await d.locator("#known-info").evaluate((x) => (x.open = true));
+  await d.getByText("Paste hours from the park calendar").click();
+  await d.getByLabel("Pasted hours").fill("Tue, Feb 2\nMagic Kingdom 9:00 AM – 10:00 PM\nEPCOT 9am-9pm\nWed, Feb 3\nHollywood Studios 8:30 AM – 9:00 PM\nAnimal Kingdom 8am-7pm\nThu, Feb 4\nMagic Kingdom 9am-10pm\nEPCOT 9am-9pm");
+  await d.getByRole("button", { name: "Review" }).click();
+  await d.getByRole("button", { name: /Add 6 park-hour entries/ }).click();
+  check(await d.getByText(/Added 6 days of park hours/).isVisible(), "pasted park hours reviewed and added");
   await d.getByRole("button", { name: "Plan my days" }).click();
   await d.getByText("Fit with your priorities").first().waitFor({ timeout: 20000 });
+  check((await d.getByText(/Park hours 9:00 AM–10:00 PM|Park hours 8:30 AM–9:00 PM|Park hours 8:00 AM–7:00 PM|Park hours 9:00 AM–9:00 PM/).count()) >= 3, "plan uses the pasted park hours");
   await d.getByRole("button", { name: "Save itinerary" }).click();
   await d.waitForURL(/\/itinerary\/itin-/, { timeout: 20000 });
   const url = d.url();

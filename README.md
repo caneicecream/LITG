@@ -109,7 +109,7 @@ Open **Itinerary** and start from a saved trip, from your current plan on Plan &
    - Optional: midday rest, keep 2–4 pm free, not the busiest day first, rest day.
    - Park hopping (only if the ticket has it).
    - Day start and end, meal windows, mobility, and the wait buffer used when a wait is unknown.
-5. **What you already know (optional).** Park hours, show and attraction times, dining reservations, Lightning Lane return windows you hold, park reservations, closures, your wait estimates, and crowd estimates. Evening shows and parades are only planned once you enter their time. Missing information in a plan has a button that opens the right form. Each entry records its source and when you entered it, and is marked "You entered" or "Your estimate", never "Verified".
+5. **What you already know (optional).** Park hours (type them in, or **paste several days at once** from the official park calendar and review what was understood before adding), show and attraction times, dining reservations, Lightning Lane return windows you hold, park reservations, closures, your wait estimates, and crowd estimates. Evening shows and parades are only planned once you enter their time. Missing information in a plan has a button that opens the right form. Each entry records its source and when you entered it, and is marked "You entered" or "Your estimate", never "Verified".
 6. **Plan my days** or **Compare relaxed vs ride-focused.** Review the plan, edit anything, and plan again; unrelated choices are kept. The comparison checks that both plans use the same trip and park information. Side by side, it shows must-dos, activities, walking, waiting (your estimates vs assumed), meals, breaks, free time, start and finish times, feasibility and unknowns. It also spells out the trade-offs: more activities isn't treated as automatically better.
 7. **Save.** If the saved trip changes later (dates, resort, party, tickets or ticket rules), the itinerary shows exactly what changed. It keeps planning with the details it was made for until you press **Use the current trip details**; nothing is applied silently. Saving keeps the inputs (including your park information with its provenance), the plan, its score breakdown and the planner version. Planning again and saving adds a **new version**; earlier versions are never changed and can be reopened.
 
@@ -250,7 +250,7 @@ npm run perf         # itinerary planning, saving/reopening versions, history qu
 BASE_URL=http://localhost:3000 npm run e2e   # browser smoke test against a running app (needs Playwright)
 ```
 
-352 tests in total: 322 run without a database, and the 30 PostgreSQL tests run when `TEST_DATABASE_URL` is set. The browser smoke test checks:
+358 tests in total: 328 run without a database, and the 30 PostgreSQL tests run when `TEST_DATABASE_URL` is set. The browser smoke test checks:
 - no horizontal overflow at desktop and phone widths on every page;
 - the itinerary flow, from the demo to a saved second version;
 - planning from a saved trip, and the trip-change warning;
@@ -320,7 +320,7 @@ src/
                        payments.ts (schedule & cancellation exposure), ticketUsage.ts (usability)
     optimizer/         optimize.ts (enumerate → constrain → bound → price → rank → award),
                        bound.ts (lower bounds for pruning), constraints.ts, scoring.ts
-  itinerary/           catalog.ts (parks, areas, attractions with kind, schedule type, reported heights, advisories), types.ts (validated inputs with provenance, outputs),
+  itinerary/           catalog.ts (parks, areas, attractions with kind, schedule type, reported heights, advisories), importers/hours.ts (pasted park hours), types.ts (validated inputs with provenance, outputs),
                        context.ts (trip context, demo), engine.ts (allocation, scheduling, scoring, verification, comparison)
   db/                  PostgreSQL: pool, migrations, observation queries, JSON import
   monitoring/          fingerprint.ts (equivalent configurations), series.ts (history), detect.ts (change detection),
@@ -385,4 +385,10 @@ This is a **single-user, local application**. Run it on your own computer or a p
   - All input is validated at the API boundary.
 - **Not provided:** rate limiting, audit logs, backups. Back up `data/local-store.json` or the PostgreSQL database yourself.
 
-For design decisions and the full calculation rules, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For status and next steps, see [docs/ROADMAP.md](docs/ROADMAP.md).
+Project documents:
+- [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md): goals, trust contract, scope.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): design and calculation rules.
+- [docs/PROJECT_STATE.md](docs/PROJECT_STATE.md): current state and validated results.
+- [docs/DECISIONS.md](docs/DECISIONS.md): decisions and when to revisit them.
+- [docs/DATA_SOURCES.md](docs/DATA_SOURCES.md): investigated data providers.
+- [docs/ROADMAP.md](docs/ROADMAP.md): milestones and increments.

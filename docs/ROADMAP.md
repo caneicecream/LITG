@@ -182,6 +182,15 @@ Also changed:
 - The wide price search takes about 5 s.
 - Single-user with no authentication: not for public deployment.
 
+## Post-M6 increments
+
+Work now proceeds as evidence-based increments rather than milestones. Current state: `docs/PROJECT_STATE.md`. Decisions: `docs/DECISIONS.md`. Sources: `docs/DATA_SOURCES.md`.
+
+| Date | Increment | Why | Validated |
+| --- | --- | --- | --- |
+| 2026-10-31 | **Data-source research** (Queue-Times, ThemeParks.wiki, RideSpy) | Directive: evaluate permitted live sources first | Web search only; hosts blocked by network policy (proxy 403); nothing integrated. Findings in DATA_SOURCES.md |
+| 2026-10-31 | **Park-hours paste importer** with a review step | Missing hours are the main reason plans are provisional; the form needed one submission per park per date | 6 unit tests (including end-to-end planning with imported hours); e2e paste flow passes in JSON and PostgreSQL modes |
+
 ## Next steps (after Milestone 6)
 
 1. Use it with a real trip: enter real quotes, park hours and reservations, and turn what's learned into scenario and itinerary regression tests.

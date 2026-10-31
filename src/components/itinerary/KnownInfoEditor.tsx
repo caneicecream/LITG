@@ -4,6 +4,7 @@ import { useState } from "react";
 import { formatShortDate, type IsoDate } from "@/domain/dates";
 import { ATTRACTIONS, attractionById, parkById, PARKS } from "@/itinerary/catalog";
 import type { InfoProvenance, ParkInfo } from "@/itinerary/types";
+import { mergeHours, parseParkHours, type HoursImport } from "@/itinerary/importers/hours";
 import { InfoChip } from "./ItineraryView";
 
 /**
@@ -48,6 +49,7 @@ export function KnownInfoEditor({ info, onChange, dates, parks, today, section, 
       </div>
       <p className="hint">{SECTIONS.find((s) => s.key === open)!.help}</p>
       <Entries info={info} k={open} onRemove={(i) => remove(open, i)} />
+      {open === "hours" && dates.length > 0 && <PasteHours info={info} onChange={onChange} trip={{ arrival: dates[0]!, departure: dates[dates.length - 1]! }} today={today} />}
       <AddForm key={open} k={open} dates={dates} parks={parkList.map((p) => p.id)} attractions={attractions.map((a) => a.id)} today={today} onAdd={(item) => add(open, item)} />
     </div>
   );
@@ -299,5 +301,107 @@ function AddForm({ k, dates, parks, attractions, today, onAdd }: { k: Section; d
         <button onClick={submit}>Add</button>
       </div>
     </div>
+  );
+}
+
+/** Paste a block of hours from the official park calendar, review what was understood, then add it. */
+function PasteHours({ info, onChange, trip, today }: { info: ParkInfo; onChange: (p: ParkInfo) => void; trip: { arrival: IsoDate; departure: IsoDate }; today: string }) {
+  const [text, setText] = useState("");
+  const [source, setSource] = useState("Official park calendar (pasted)");
+  const [preview, setPreview] = useState<HoursImport | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const review = () => {
+    setDone(null);
+    setPreview(parseParkHours(text, trip, { status: "manual", source: source.trim() || "Pasted park hours", observedAt: today }));
+  };
+  const existing = new Set(info.hours.map((h) => `${h.date}|${h.parkId}`));
+  return (
+    <details className="stack" style={{ borderTop: "1px solid var(--border)", paddingTop: 10 }}>
+      <summary className="small">
+        <strong>Paste hours from the park calendar</strong> (several days at once)
+      </summary>
+      <p className="hint">
+        Copy the hours for your dates from the official park calendar and paste them here: a date, then one park per line, e.g. “Tue, Feb 2” then “Magic Kingdom 9:00 AM – 10:00 PM”, optionally “Early Entry 8:30 AM”. Nothing is fetched by the app; you review everything before it's added.
+      </p>
+      <label className="field">
+        Pasted hours
+        <textarea rows={6} value={text} onChange={(e) => setText(e.target.value)} placeholder={"Tue, Feb 2\nMagic Kingdom 9:00 AM – 10:00 PM\nEarly Entry 8:30 AM\nEPCOT 9:00 AM – 9:00 PM"} />
+      </label>
+      <label className="field">
+        Source
+        <input value={source} onChange={(e) => setSource(e.target.value)} />
+      </label>
+      <div>
+        <button type="button" onClick={review} disabled={!text.trim()}>
+          Review
+        </button>
+      </div>
+      {preview && (
+        <div className="stack" style={{ gap: 6 }}>
+          {preview.entries.length > 0 ? (
+            <div className="scroll-x">
+              <table className="cmp">
+                <thead>
+                  <tr>
+                    <th>Date</th>
+                    <th>Park</th>
+                    <th>Hours</th>
+                    <th>Early entry</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {preview.entries.map((e) => (
+                    <tr key={`${e.date}|${e.parkId}`}>
+                      <td className="small">{formatShortDate(e.date)}</td>
+                      <td className="small">{parkById.get(e.parkId)?.name}</td>
+                      <td className="small num">
+                        {e.open}–{e.close}
+                      </td>
+                      <td className="small">{e.earlyEntryMin ? `${e.earlyEntryMin} min` : "—"}</td>
+                      <td className="small muted">{existing.has(`${e.date}|${e.parkId}`) ? "replaces what you entered" : ""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="small">Nothing usable was found.</p>
+          )}
+          {preview.warnings.map((w) => (
+            <p key={w} className="small save-neg">
+              {w}
+            </p>
+          ))}
+          {preview.skipped.length > 0 && (
+            <ul className="notices small muted">
+              {preview.skipped.map((s, i) => (
+                <li key={i}>
+                  Not used: “{s.line}” — {s.reason}
+                </li>
+              ))}
+            </ul>
+          )}
+          {preview.entries.length > 0 && (
+            <div>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => {
+                  const { info: next, replaced } = mergeHours(info, preview.entries);
+                  onChange(next);
+                  setDone(`Added ${preview.entries.length} day${preview.entries.length === 1 ? "" : "s"} of park hours${replaced ? ` (${replaced} replaced)` : ""}. Plan again to use them.`);
+                  setPreview(null);
+                  setText("");
+                }}
+              >
+                Add {preview.entries.length} park-hour entr{preview.entries.length === 1 ? "y" : "ies"}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {done && <p className="small">{done}</p>}
+    </details>
   );
 }

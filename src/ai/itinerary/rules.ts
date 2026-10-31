@@ -141,7 +141,7 @@ export function interpretItineraryWithRules(message: string, input: ItineraryInp
   // Questions about current facts the app doesn't have.
   if (/\b(what are|what're|when (does|do)|are the|park hours|opening hours|how long (is|are) the (wait|line)|wait times?|how busy|crowd(s| levels?)?|is .+ (open|closed)|available|availability)\b/.test(t) && /\?$|^(what|when|how|is|are)\b/.test(t)) {
     unsupported.push(
-      "I don't have live park information: no official hours, closures, wait times, crowd levels, or reservation and Lightning Lane availability. If you know them (for example from the official park calendar), add them under “What you already know” in the itinerary planner. Otherwise I plan provisionally with your planning window and a wait buffer, and say so.",
+      "I don't have live park information: no official hours, closures, wait times, crowd levels, or reservation and Lightning Lane availability. If you know them (for example from the official park calendar), add them under “What you already know” in the itinerary planner (park hours can be pasted for several days at once from the official calendar). Otherwise I plan provisionally with your planning window and a wait buffer, and say so.",
     );
   }
 

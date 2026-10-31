@@ -401,6 +401,7 @@ The itinerary planner consumes a **validated trip context** and produces a separ
 - **Plan the park days for this option.** Any optimized option can be planned. The client hands the request that produced the results, plus the option's configuration, to `POST /api/itinerary/context`, which validates the option. The trip card shows exactly what is planned.
 - **Saved trips** link to `/itinerary?trip=…` and list their itineraries. Saved-itinerary summaries carry the trip label and dates.
 - **Trip-change warnings.** `contextDifferences` compares a saved itinerary's trip snapshot with the trip as it is now: dates, resort, party, tickets, ticket rules, arrival/departure-day parks. Differences are shown; nothing is replaced until the user presses "Use the current trip details". Planning again then adds a new version.
+- **Pasted park hours** (`itinerary/importers/hours.ts`). Hours copied from the official calendar are parsed as date headings or date-prefixed lines, one park per line, with optional "Early Entry" times. Dates without a year resolve within the trip. Every unused line is reported with its reason: no date, two parks, ambiguous times, park closed, extended evening hours, outside the trip. The user reviews the rows before they're merged; a row for the same date and park replaces the earlier one.
 - **Actionable unknowns.** Missing information in a plan (hours, show times, closures, waits, Lightning Lane windows, park reservations) has a button that opens the matching entry form.
 
 ## Security model (Milestone 6)
