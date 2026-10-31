@@ -77,6 +77,7 @@ Also changed:
 4. ~~Milestone 3 (AI-assisted planning)~~ done; see below.
 5. ~~Milestone 4 (historical pricing and monitoring)~~ done; see below.
 6. ~~Milestone 5 (itinerary optimization)~~ done; see below.
+7. ~~Milestone 6 (product readiness and data quality)~~ done; see below.
 
 ## Milestone 3: AI-assisted planning (done, 2026-10-30)
 
@@ -149,6 +150,46 @@ Also changed:
 - *Weather, transport timetables*: not modelled; transfer and walking times are estimates.
 - *Live Claude verification*: as before, the provider is tested against a mocked SDK client only.
 
-## Milestone 6: expansion (not started)
+## Milestone 6: product readiness and data quality (done, 2026-10-31)
+
+**Prioritized checklist (from inspecting the code, tests and running app) and outcome**
+
+| # | Issue | Type | Outcome |
+| --- | --- | --- | --- |
+| 1 | Must-dos could land late in the day without a deliberate reason | Confirmed defect (M5 known issue) | ✅ Must-first ordering plus a documented lateness penalty; a late must-do says why; regression tests. |
+| 2 | Evening shows could be placed at arbitrary times; a show's entered time was treated as a window to fit the whole visit inside | Confirmed defect | ✅ Spectaculars only at entered times; performance times are show starts. A show-time entry form was added: the model supported it, but the UI didn't. |
+| 3 | An item whose window opens later could leave hours of idle time | Confirmed defect | ✅ Deferred while something else fits. |
+| 4 | Thin catalog, durations presented without per-field basis | Data quality | ✅ 68 curated entries with kind, schedule type, reported heights (where guides agree), dated advisories, and an explicit basis per field. |
+| 5 | Comparisons only counted activities | Gap | ✅ Same-facts check, waits (estimate vs assumed), meals, breaks, free time, start and finish, feasibility, trade-offs, score comparability. |
+| 6 | No path from an optimized option or saved trip to an itinerary; no warning when a trip changed | Gap | ✅ "Plan the park days" from options and saved trips; trip-change warnings with explicit update; linked itineraries on saved trips. |
+| 7 | Missing information only displayed | Gap | ✅ Unknowns link to the matching entry form. |
+| 8 | API writes accepted cross-site form posts (CSRF against a local instance) | Confirmed defect (security) | ✅ Same-origin proxy; 403 and 415 responses; tests. |
+| 9 | Assistant routes echoed internal error messages; credentials could appear in stored email errors and logs | Confirmed defect (security) | ✅ `RequestError` vs generic 500; redaction. |
+| 10 | Assistant explanations could claim current prices, guarantees or availability | Risk | ✅ Claim check withholds such text; price-freshness facts. |
+| 11 | Itinerary form overflowed at phone width; two pages lacked an `<h1>`; one input lacked a label | Confirmed defects (UX/a11y) | ✅ Fixed; browser smoke test added. |
+| 12 | Pricing engine correctness | Review | ✅ No defect found. Hand-checked scenarios added: family component pricing, a missing child price (incomplete, never cheaper), a tax-exclusive package with a promotion present, best-value price-score dependence on alternatives. |
+| 13 | Performance | Measurement | ✅ Measured (see ARCHITECTURE.md); no change needed. |
+
+**Data sources used.** Third-party Disney guides found by web search on 2026-10-31, used for spot checks: attraction membership, reported heights, reported 2026 changes. Wikipedia and Disney's site couldn't be fetched from the build environment (network policy). No scraping; nothing is presented as confirmed by Disney.
+
+**Live AI verification.** Not performed: no Claude API key was available. The provider remains tested against a mocked SDK client only.
+
+**Remaining known issues**
+
+- Durations, walking distances and arrive-early times are estimates. Heights and advisories are secondary-source reports to verify.
+- No show performance times or park hours are known unless the user enters them.
+- One hop per day; breakfast isn't planned; weather isn't modelled.
+- The wide price search takes about 5 s.
+- Single-user with no authentication: not for public deployment.
+
+## Next steps (after Milestone 6)
+
+1. Use it with a real trip: enter real quotes, park hours and reservations, and turn what's learned into scenario and itinerary regression tests.
+2. Authentication in front of the app before any shared or hosted use.
+3. An authorized data source, if one becomes available (licensed park-hours or pricing feed), through the existing adapter interfaces.
+4. Installments in the forms; bulk entry for room rates and point charts.
+5. A user-maintained catalog override: correct durations and heights in the UI and keep them with provenance.
+
+## Milestone 7: expansion (not started)
 
 Only after the core has proven useful with real quotes.

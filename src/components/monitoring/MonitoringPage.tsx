@@ -141,7 +141,7 @@ function EmailSettings({ emailConfigured }: { emailConfigured: boolean }) {
         <label className="check">
           <input type="checkbox" checked={s.emailEnabled} disabled={!emailConfigured} onChange={(e) => setS({ ...s, emailEnabled: e.target.checked })} /> Email me too
         </label>
-        <input style={{ maxWidth: 280 }} type="email" placeholder="you@example.com" value={s.emailTo ?? ""} onChange={(e) => setS({ ...s, emailTo: e.target.value })} />
+        <input style={{ maxWidth: 280 }} type="email" aria-label="Email address for notifications" placeholder="you@example.com" value={s.emailTo ?? ""} onChange={(e) => setS({ ...s, emailTo: e.target.value })} />
         <button onClick={save}>Save</button>
         {msg && <span className="small muted">{msg}</span>}
       </div>

@@ -1,3 +1,4 @@
+import { redact } from "@/lib/errors";
 import { createHash, randomUUID } from "node:crypto";
 import { CATALOG } from "@/data/catalog";
 import { priceEntrySchema } from "@/data/entrySchema";
@@ -191,7 +192,7 @@ async function consultAdapters(db: Db, adapters: ObservationAdapter[], key: Conf
       }
       out.push({ id: a.id, name: a.name, outcome: `${recorded} new observation(s), ${unchanged} unchanged, ${rejected} rejected by validation` });
     } catch (err) {
-      out.push({ id: a.id, name: a.name, outcome: `failed: ${err instanceof Error ? err.message.slice(0, 200) : "unknown error"}` });
+      out.push({ id: a.id, name: a.name, outcome: `failed: ${redact(err instanceof Error ? err.message : "unknown error").slice(0, 200)}` });
     } finally {
       clearTimeout(timer);
     }
@@ -312,7 +313,7 @@ export async function runDueMonitors(db: Db, opts: Omit<CheckOptions, "trigger">
       const r = await runMonitorCheck(db, id, { ...opts, trigger: "scheduled", now });
       results.push({ monitorId: id, ok: !!r, events: r?.check.events.length ?? 0 });
     } catch (err) {
-      results.push({ monitorId: id, ok: false, error: err instanceof Error ? err.message : String(err) });
+      results.push({ monitorId: id, ok: false, error: redact(err instanceof Error ? err.message : String(err)) });
     }
   }
   return results;

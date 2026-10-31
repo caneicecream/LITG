@@ -49,6 +49,26 @@ export function checkGrounding(text: string, facts: Fact[], cited: string[], ext
   return { ok: unknownAmounts.length === 0 && unknownRatios.length === 0 && unknownFacts.length === 0, unknownAmounts, unknownRatios, unknownFacts };
 }
 
+/**
+ * Wording the facts never support on their own: current or live prices,
+ * guarantees, availability, confirmed bookings. Allowed only if the same
+ * wording appears in a fact.
+ */
+const CLAIMS: [RegExp, string][] = [
+  [/\b(live|real[- ]time|up[- ]to[- ]date|today'?s) (prices?|rates?|waits?|wait times?|availability|hours)\b/i, "live data"],
+  [/\b(prices?|rates?|totals?) (is|are) (still )?(current|valid|guaranteed)\b/i, "a current price"],
+  [/\bcurrent(ly)? (prices?|rates?|waits?|wait times?|availability|park hours|crowds?)\b/i, "current conditions"],
+  [/\bguarantee(d|s)?\b/i, "a guarantee"],
+  [/\b(is|are|will be) (available|bookable|open)\b/i, "availability"],
+  [/\b(you have|you've got|there is|there's) a (confirmed )?(reservation|booking)\b/i, "a reservation"],
+  [/\b(I|I've|I have|we have) (booked|reserved|cancell?ed)\b/i, "a booking action"],
+];
+
+export function unsupportedClaims(text: string, facts: Fact[]): string[] {
+  const factText = facts.map((f) => f.text).join("\n");
+  return CLAIMS.filter(([re]) => re.test(text) && !re.test(factText)).map(([, what]) => what);
+}
+
 /** Accept the AI explanation only if every figure in it comes from the facts. */
 export function groundExplanation(
   ai: Explanation | null,
@@ -58,8 +78,10 @@ export function groundExplanation(
 ): { message: string; cited: string[]; grounded: "ai" | "deterministic"; rejectedReason?: string } {
   if (ai && ai.message.trim()) {
     const check = checkGrounding(ai.message, facts, ai.citedFacts, extraAllowedCents);
-    if (check.ok) return { message: ai.message.trim(), cited: [...new Set(ai.citedFacts)], grounded: "ai" };
+    const claims = unsupportedClaims(ai.message, facts);
+    if (check.ok && !claims.length) return { message: ai.message.trim(), cited: [...new Set(ai.citedFacts)], grounded: "ai" };
     const reasons = [
+      ...(claims.length ? [`claims the facts don't support (${claims.join(", ")})`] : []),
       ...(check.unknownAmounts.length ? [`amounts not produced by the optimizer: ${check.unknownAmounts.join(", ")}`] : []),
       ...(check.unknownRatios.length ? [`figures not in the results: ${check.unknownRatios.join(", ")}`] : []),
       ...(check.unknownFacts.length ? [`citations to unknown facts: ${check.unknownFacts.join(", ")}`] : []),
@@ -80,7 +102,9 @@ export function deterministicExplanation(facts: Fact[], context: { question: str
   // Price-history and switching questions are answered from those facts alone.
   const aboutHistory = /record|histor|observ|trend|drop|went (up|down)|price change|has the price/.test(q);
   const aboutSwitching = /switch|rebook|cancel|worth/.test(q);
+  const aboutFreshness = /current|still valid|still good|fresh|up to date|how old|latest price/.test(q);
   const focused = [
+    ...(aboutFreshness ? pick((f) => f.text.startsWith("Price freshness")) : []),
     ...(aboutHistory ? pick((f) => f.text.startsWith("Price history"), 8) : []),
     ...(aboutSwitching ? pick((f) => f.text.startsWith("Switching analysis"), 8) : []),
   ];

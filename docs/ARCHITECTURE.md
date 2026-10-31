@@ -320,7 +320,18 @@ The itinerary planner consumes a **validated trip context** and produces a separ
   - waits (`your_estimate`, `predicted`, or `observed`, which is reference only);
   - crowd estimates, park reservations, dining reservations, Lightning Lane return windows, Lightning Lane rules.
   - User entries are `manual`, `estimated` or `predicted`, never `verified`, which is reserved for an authorized adapter. `illustrative` is for the demo only. `stale` (older than 30 days by default) and `unavailable` are derived.
-- **Catalog** (`catalog.ts`): parks, areas with schematic coordinates (walking-minute units), and attractions with category, intensity and approximate duration. It is labelled estimated and dated, and contains no hours, waits or crowds.
+- **Catalog** (`catalog.ts`): parks, areas with schematic coordinates (walking-minute units), and 68 attractions. Each field has its own basis:
+
+| Field | Basis |
+| --- | --- |
+| Existence, park, land | Curated; spot-checked against third-party guides via web search on 2026-10-31 (secondary sources). Attractions reported as closing in 2026 are left out. |
+| `kind` (ride / show / walkthrough / experience), `category`, `intensity` | Curated classification. |
+| `durationMin` | **Estimate** (approximate experience length, excluding waits). |
+| `schedule` | `continuous`, `showtimes` (scheduled performances: times must come from the user), or `spectacular` (evening shows and parades: planned only at an entered time). |
+| `minHeightIn` | **Reported** by third-party guides where they agreed; labelled "verify". Absent means unknown, never "no requirement". |
+| `advisories` | Dated, sourced reports (refurbishments, re-themes) with a confidence level. Shown for overlapping trip dates; **never applied** as closures. A confirmed closure is a user entry. |
+
+  The catalog contains no hours, waits or crowds.
 
 ### Algorithm (`itinerary/engine.ts`)
 
@@ -329,7 +340,18 @@ The itinerary planner consumes a **validated trip context** and produces a separ
    - Constraints: ticket days, the use window, pins, commitments (dining, Lightning Lane and park reservations tie a date to a park; hop order follows commitment times), and reservations when required.
    - Allocations are ranked by a cheap estimate: capacity vs must, want and optional demand, coverage of the requested parks, the hop penalty, "busiest day first", and the rest-day preference.
    - Beam width 60; at most 21 days. The top 4 allocations are scheduled in full.
-3. **Day scheduling.** Three orderings per park day: priority-weighted nearest neighbour (with a revisit penalty, stronger with "avoid crossing the park"), and clockwise and counter-clockwise area sweeps. Each ordering is simulated minute by minute:
+3. **Day scheduling.** Four orderings per park day:
+   - priority-weighted nearest neighbour, with a revisit penalty (stronger with "avoid crossing the park");
+   - **must-dos first**, in walking order;
+   - clockwise and counter-clockwise area sweeps.
+
+   The day ordering is chosen by a day score that adds a **must-do lateness penalty** (6 points per hour a must-do starts after the day's start, ignoring must-dos with their own time windows). This favours earlier must-dos without forcing them ahead of large walking costs. A must-do that still starts 3+ hours into the day gets a note explaining why: its window, the other must-dos ahead of it, or grouping to limit walking.
+
+   An item whose window opens more than 20 minutes later is deferred while something else fits, so a late show doesn't leave the morning idle.
+
+   For **performances** (`showtimes`, `spectacular`), the entered time is the start of the show: arriving early (10 min for shows, 30 min for evening spectaculars, assumed) happens before it. Spectaculars without an entered time are never scheduled; they're listed with a link to enter the time. Shows without times are scheduled but flagged "performance times unknown".
+
+   Each ordering is simulated minute by minute:
    - walking between areas: schematic distance + 2 min, × 1.4 for slower mobility;
    - waits: your estimate, then a prediction, then your buffer scaled by your crowd estimate;
    - attraction windows and closures;
@@ -351,7 +373,11 @@ The itinerary planner consumes a **validated trip context** and produces a separ
 
 **Status:** *feasible* (hard constraints met, all must-dos placed), *partial* (some must-dos left out, each with a reason), or *infeasible*. A separate *provisional* flag is set when hours are unknown, waits are assumed, reservations are unresolved, or the plan is the demo.
 
-**Comparison** (`compareVariants`): the same inputs with different preference sets (relaxed vs ride-focused, or one fewer park day from the assistant). Results are summarized as must-dos, attractions, walking, breaks and park days, and "only in A / only in B".
+**Comparison** (`compareVariants`, `compareItineraries`): the same inputs with different preference sets (relaxed vs ride-focused, or one fewer park day from the assistant).
+- **Same-facts check.** Trip context, park information, demo flag and planner version are compared by hash. Any difference is disclosed, and the scores are then declared not directly comparable.
+- **Rows.** Feasibility, must-dos, park days, activities, walking and transfers, waiting from your estimates vs assumed buffer, meals, breaks, free time, unplanned time at day ends, earliest start, latest finish, conflicts and unknowns.
+- **Scores.** Per-component scores with each plan's weights. Totals count as comparable only when the weights match.
+- **Trade-offs.** Generated sentences: more activities vs less rest, walking, late finishes, must-do coverage, and assumptions present in only one plan. More activities is never treated as automatically better.
 
 ### Persistence
 
@@ -366,3 +392,36 @@ The itinerary planner consumes a **validated trip context** and produces a separ
 - **Proposals.** An `ItineraryPatch` (all fields nullable) comes from the basic-mode interpreter or from Claude (`interpretItinerary`, structured output). `applyItineraryPatch` validates ids, trip dates and ticket limits. It accepts dining and Lightning Lane times only when they appear in the user's messages, and re-validates the whole input. Proposals use the existing review/apply/dismiss and auto-apply model.
 - **Planning and explaining.** Applying runs the planner (plus up to two comparison variants) and builds itinerary facts. Explanations must cite facts, and every number in them (times, minutes, counts, scores) must appear in the facts. Otherwise the deterministic fact list is shown, with the reason.
 - **Current facts.** Questions about park hours, waits, crowds or availability get an honest "not available" with the manual-entry path.
+- **Unsupported claims (Milestone 6).**
+  - Trip and itinerary explanations are also checked for wording the facts don't support: "current/live price", "guaranteed", "is available", "you have a (confirmed) reservation", "I booked". Such text is withheld unless the same wording appears in a fact.
+  - Trip explanations include a **price freshness** fact: when the user's prices were observed, how many are stale, and that re-running the optimizer re-evaluates stored prices rather than checking prices again.
+
+### Trip ↔ itinerary workflow (Milestone 6)
+
+- **Plan the park days for this option.** Any optimized option can be planned. The client hands the request that produced the results, plus the option's configuration, to `POST /api/itinerary/context`, which validates the option. The trip card shows exactly what is planned.
+- **Saved trips** link to `/itinerary?trip=…` and list their itineraries. Saved-itinerary summaries carry the trip label and dates.
+- **Trip-change warnings.** `contextDifferences` compares a saved itinerary's trip snapshot with the trip as it is now: dates, resort, party, tickets, ticket rules, arrival/departure-day parks. Differences are shown; nothing is replaced until the user presses "Use the current trip details". Planning again then adds a new version.
+- **Actionable unknowns.** Missing information in a plan (hours, show times, closures, waits, Lightning Lane windows, park reservations) has a button that opens the matching entry form.
+
+## Security model (Milestone 6)
+
+- **Single user.** There are no accounts and no authentication. The app is meant for a personal machine or private network; public deployment needs an authenticating proxy in front of it.
+- **CSRF.** `src/proxy.ts` (the Next 16 proxy) runs on `/api/*`. Writes with an `Origin` from another host (or `null`) get 403. Form-encoded and `text/plain` bodies get 415, so cross-site HTML forms can't reach the JSON APIs. `POST /api/monitoring/run` is exempt from the content-type rule; it is authenticated by `MONITOR_CRON_SECRET` with a constant-time comparison.
+- **Errors.** Intentional, user-facing errors are `RequestError`s (400). Database outages are 503. Anything else is logged server-side with credentials redacted (`redact()`: URL passwords, API keys, configured secrets) and answered with a generic 500. Email failures store a redacted error on the notification and never lose it.
+- **Secrets** (`ANTHROPIC_API_KEY`, `DATABASE_URL`, `SMTP_URL`, `MONITOR_CRON_SECRET`) are read only on the server and never sent to the browser.
+
+## Performance (measured 2026-10-31, development container)
+
+| Workflow | Median |
+| --- | --- |
+| Price optimization, default search (43,596 candidates, 98% pruned or infeasible) | 375 ms |
+| Price optimization, wide search (450,492 candidates) | 5.2 s |
+| Itinerary: demo, 4 park days | 13 ms |
+| Itinerary: 15-day trip, 10 Park Hopper days, 23 must-dos | 127 ms |
+| Itinerary: regenerate after an edit | 8 ms |
+| Relaxed vs ride-focused comparison | 21 ms |
+| Save an itinerary version (JSON / PostgreSQL) | 19 ms / 16 ms |
+| Reopen an itinerary with 20 versions (JSON / PostgreSQL) | 18 ms / 13 ms |
+| Monitoring history query, 500 observations (PostgreSQL) | 9 ms |
+
+Reproduce with `npm run bench` and `npm run perf`. No performance change was needed in Milestone 6.

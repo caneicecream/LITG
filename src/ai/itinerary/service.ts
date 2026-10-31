@@ -1,9 +1,10 @@
+import { RequestError } from "@/lib/errors";
 import { randomUUID } from "node:crypto";
 import { todayIso } from "@/domain/dates";
 import { tripContextFromRequest } from "@/itinerary/context";
 import { compareItineraries, compareSummary, planItinerary, type ItineraryComparison } from "@/itinerary/engine";
 import { defaultPreferences, emptyParkInfo, type Itinerary, type ItineraryInput } from "@/itinerary/types";
-import { checkGrounding } from "../grounding";
+import { checkGrounding, unsupportedClaims } from "../grounding";
 import { AiError } from "../providers/provider";
 import { explanationSchema, type Conversation, type ConversationMessage, type ItineraryProposalRecord } from "../types";
 import type { AssistantDeps } from "../service";
@@ -105,8 +106,8 @@ export async function sendItineraryMessage(deps: AssistantDeps, conv: Conversati
 export async function applyItineraryProposal(deps: AssistantDeps, conv: Conversation, messageId: string, save: (c: Conversation) => Promise<Conversation>): Promise<Conversation> {
   const m = conv.messages.find((x) => x.id === messageId);
   const record = m?.itineraryProposal;
-  if (!m || !record || !conv.itinerary) throw new Error("Proposal not found");
-  if (record.status !== "pending" || !record.preview) throw new Error(`This proposal can't be applied (${record.status}).`);
+  if (!m || !record || !conv.itinerary) throw new RequestError("Proposal not found");
+  if (record.status !== "pending" || !record.preview) throw new RequestError(`This proposal can't be applied (${record.status}).`);
   const question = [...conv.messages].reverse().find((x) => x.kind === "user" && x.at <= m.at)?.text ?? "";
   conv.itinerary.input = record.preview;
   record.status = "applied";
@@ -177,11 +178,13 @@ async function explainInto(
   if (parsed?.success && parsed.data.message.trim()) {
     const money = checkGrounding(parsed.data.message, facts, parsed.data.citedFacts);
     const numbers = checkItineraryNumbers(parsed.data.message, facts);
-    if (money.ok && numbers.length === 0) {
+    const claims = unsupportedClaims(parsed.data.message, facts);
+    if (money.ok && numbers.length === 0 && claims.length === 0) {
       text = parsed.data.message.trim();
       cited = [...new Set(parsed.data.citedFacts)];
     } else {
-      note = `The AI explanation was withheld because it contained figures the planner didn't produce: ${[...money.unknownAmounts, ...money.unknownRatios, ...numbers, ...money.unknownFacts].join(", ")}.`;
+      const figures = [...money.unknownAmounts, ...money.unknownRatios, ...numbers, ...money.unknownFacts];
+      note = `The AI explanation was withheld because it contained ${[figures.length ? `figures the planner didn't produce: ${figures.join(", ")}` : null, claims.length ? `claims the facts don't support (${claims.join(", ")})` : null].filter(Boolean).join("; ")}.`;
     }
   }
   const det = text ? null : itineraryExplanation(facts, ctx.question, ctx.diff);

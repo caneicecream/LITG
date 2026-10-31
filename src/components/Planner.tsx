@@ -135,6 +135,7 @@ export function Planner() {
 
   return (
     <div className="planner">
+      <h1 className="sr-only">Plan and compare Walt Disney World trips</h1>
       <aside className="card sidebar">
         <div className="section row">
           <h2 style={{ flex: 1 }}>{trip ? trip.name : "Plan a trip"}</h2>

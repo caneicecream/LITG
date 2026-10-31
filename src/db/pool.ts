@@ -1,4 +1,5 @@
 import { Pool, types, type PoolClient, type QueryResultRow } from "pg";
+import { redact } from "@/lib/errors";
 
 // Dates stay ISO strings (no timezone shifts), timestamps become ISO strings,
 // and bigint money/points values become numbers (all well within 2^53).
@@ -14,7 +15,7 @@ types.setTypeParser(20, (v) => Number(v));
 
 export class DatabaseUnavailableError extends Error {
   constructor(cause: unknown) {
-    super(`The database is unavailable: ${cause instanceof Error ? cause.message : String(cause)}. Check DATABASE_URL and that PostgreSQL is running.`);
+    super(`The database is unavailable: ${redact(cause instanceof Error ? cause.message : String(cause))}. Check DATABASE_URL and that PostgreSQL is running.`);
     this.name = "DatabaseUnavailableError";
   }
 }

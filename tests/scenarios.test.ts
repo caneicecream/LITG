@@ -357,3 +357,60 @@ describe("scenario: real quotes are never compared with illustrative prices", ()
     expect(res.awards.find((a) => a.kind === "cheapest")!.evaluationId).toContain("2027-01-18");
   });
 });
+
+// ── Milestone 6: hand-checked high-risk combinations ──────────────────────────
+
+describe("scenario (M6): family with a child, component pricing", () => {
+  const rate = { id: "r6", kind: "room_rate" as const, resortId: "pop-century", roomTypeId: "standard", validFrom: "2027-01-01", validTo: "2027-01-31", nightlyCents: 20_000, taxIncluded: false, provenance: TEST };
+  const child = hopper5(55_000, { id: "tp-child", age: "child" });
+  const req = request({ party: { adults: 2, children: 1, infants: 1 } });
+
+  it("totals every component by hand: 6×$200 room + 12.5% + 2×$600 + $550 tickets + 6.5%", () => {
+    const e = run(req, data({ roomRates: [rate], ticketPrices: [hopper5(60_000), child] })).ranked[0]!;
+    // Room $1,200.00; lodging tax 12.5% = $150.00; tickets $1,200 + $550 = $1,750.00; sales tax 6.5% = $113.75. Infant: free.
+    expect(line(e, "room")!.amountCents).toBe(120_000);
+    expect(line(e, "room_tax")!.amountCents).toBe(15_000);
+    expect(line(e, "tickets")!.amountCents).toBe(175_000);
+    expect(line(e, "ticket_tax")!.amountCents).toBe(11_375);
+    expect(e.totalCents).toBe(120_000 + 15_000 + 175_000 + 11_375);
+    expect(e.complete).toBe(true);
+  });
+
+  it("a missing child price makes the option incomplete, never cheaper", () => {
+    const r = run(req, data({ roomRates: [rate], ticketPrices: [hopper5(60_000)] }));
+    expect(r.ranked).toHaveLength(0);
+    const e = r.excluded.incomplete[0]!;
+    expect(e.complete).toBe(false);
+    expect(e.missing.join()).toMatch(/No child price/);
+    expect(line(e, "tickets")!.amountCents).toBeNull();
+  });
+});
+
+describe("scenario (M6): a tax-exclusive package quote with an eligible promotion", () => {
+  it("uses quote + quoted taxes and never re-applies the promotion to the quote", () => {
+    const pkg = quote({ bookingMethod: "package", ticket: { option: "park_hopper", days: 5 }, totalCents: 300_000, taxIncluded: false, taxCents: 31_000 });
+    const promo = { id: "p6", name: "TEST 30% off rooms", discount: { type: "room_percent" as const, pct: 30 }, travel: { from: "2027-01-01", to: "2027-01-31", rule: "all_nights" as const }, requiresPackage: false, terms: "test", provenance: TEST };
+    const r = run(request(), data({ stayQuotes: [pkg], promotions: [promo] }));
+    const e = find(r.ranked, (x) => x.quoteId === pkg.id);
+    // $3,000.00 + $310.00 quoted taxes; no discount line, no estimated taxes on top.
+    expect(e.totalCents).toBe(331_000);
+    expect(line(e, "discount")).toBeUndefined();
+    expect(e.lines.filter((l) => l.key === "room_tax" && l.status === "estimated")).toHaveLength(0);
+  });
+});
+
+describe("scenario (M6): preference scoring depends on the alternatives present", () => {
+  it("price score is cheapest ÷ this total, so adding a cheaper option lowers others' price scores (documented behaviour)", () => {
+    const a = quote({ id: "qa", totalCents: 200_000 });
+    const b = quote({ id: "qb", resortId: "all-star-movies", totalCents: 100_000 });
+    const req2 = request({ objective: "best_value", resorts: { allowedResortIds: ["pop-century", "all-star-movies"], requireOnProperty: true, preferredResortIds: [] } });
+    const priceScore = (r: ReturnType<typeof run>, id: string) => find(r.ranked, (e) => e.quoteId === id).valueScore!.parts.find((p) => p.key === "price")!.score;
+    const tickets = [hopper5(50_000)];
+    const alone = run(req2, data({ stayQuotes: [a], ticketPrices: tickets }));
+    const both = run(req2, data({ stayQuotes: [a, b], ticketPrices: tickets }));
+    expect(priceScore(alone, "qa")).toBe(100);
+    // Totals: A $2,000 + tickets $1,000 + 6.5% tax $65 = $3,065; B $1,000 + $1,065 = $2,065. Score = round(100 × 2,065 ÷ 3,065) = 67.
+    expect(priceScore(both, "qa")).toBe(67);
+    expect(priceScore(both, "qb")).toBe(100);
+  });
+});

@@ -1,3 +1,4 @@
+import { redact } from "@/lib/errors";
 import { z } from "zod";
 import type { Db } from "@/db/pool";
 import type { MonitorEvent } from "./types";
@@ -103,7 +104,7 @@ export async function createNotification(
       delivery = { email: { status: "sent", at: new Date().toISOString() } };
     } catch (err) {
       // A failed email never loses the in-app notification.
-      delivery = { email: { status: "failed", at: new Date().toISOString(), error: err instanceof Error ? err.message.slice(0, 300) : "unknown error" } };
+      delivery = { email: { status: "failed", at: new Date().toISOString(), error: redact(err instanceof Error ? err.message : "unknown error").slice(0, 300) } };
     }
     await db.query("UPDATE notifications SET delivery = $2 WHERE id = $1", [n.id, JSON.stringify(delivery)]);
   }

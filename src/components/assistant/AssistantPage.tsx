@@ -175,6 +175,7 @@ export function AssistantPage() {
 
   return (
     <div className="assistant-layout">
+      <h1 className="sr-only">Assistant</h1>
       <section className="card chat">
         <div className="chat-head">
           <div className="row">

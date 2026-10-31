@@ -98,20 +98,20 @@ You can also edit the plan directly ("Edit plan" or "Open in full planner"), res
 
 ## Planning the park days (itineraries)
 
-Open **Itinerary** and start from a saved trip, from your current plan on Plan & compare, or from the **demo** (a fictional trip with illustrative hours and waits, clearly labelled). The trip's preferred plan supplies the dates, party, resort and ticket.
+Open **Itinerary** and start from a saved trip, from your current plan on Plan & compare, or from the **demo** (a fictional trip with illustrative hours and waits, clearly labelled). The trip's preferred plan supplies the dates, party, resort and ticket. You can also start from any optimized option: open it in the results and press **Plan the park days for this option**. Saved trips have a **Plan the park days** button and list their itineraries.
 
 1. **Your trip.** Dates, party, resort, ticket (admission days, Park Hopper or not) and any recorded ticket rules: use-within window, expiration, blocked dates, park-reservation requirement. Unknown rules are shown as unknown, never assumed.
 2. **Parks.** Tick the parks you want. Optionally fix specific days to a park, or to a rest day.
-3. **Attractions.** Mark each attraction *Must*, *Like*, *Maybe* (an extra if there's time) or *Skip*, and add your own activities. Nothing needs to be filled in to try it.
+3. **Attractions.** Mark each attraction *Must*, *Like*, *Maybe* (an extra if there's time) or *Skip*, and add your own activities. Nothing needs to be filled in to try it. Each attraction shows its approximate length (an estimate), whether it runs continuously or has scheduled performances, a reported minimum height where third-party guides agree (verify with Disney), and any reported change for your dates (shown as an advisory, never applied as a closure).
 4. **Pace and preferences.**
    - Pace: relaxed, moderate or packed.
    - Priorities: minimize walking, avoid crossing the park, fit in as much as possible, keep it relaxed.
    - Optional: midday rest, keep 2–4 pm free, not the busiest day first, rest day.
    - Park hopping (only if the ticket has it).
    - Day start and end, meal windows, mobility, and the wait buffer used when a wait is unknown.
-5. **What you already know (optional).** Park hours, dining reservations, Lightning Lane return windows you hold, park reservations, closures, your wait estimates, and crowd estimates. Each entry records its source and when you entered it, and is marked "You entered" or "Your estimate", never "Verified".
-6. **Plan my days** or **Compare relaxed vs ride-focused.** Review the plan, edit anything, and plan again; unrelated choices are kept.
-7. **Save.** Saving keeps the inputs (including your park information with its provenance), the plan, its score breakdown and the planner version. Planning again and saving adds a **new version**; earlier versions are never changed and can be reopened.
+5. **What you already know (optional).** Park hours, show and attraction times, dining reservations, Lightning Lane return windows you hold, park reservations, closures, your wait estimates, and crowd estimates. Evening shows and parades are only planned once you enter their time. Missing information in a plan has a button that opens the right form. Each entry records its source and when you entered it, and is marked "You entered" or "Your estimate", never "Verified".
+6. **Plan my days** or **Compare relaxed vs ride-focused.** Review the plan, edit anything, and plan again; unrelated choices are kept. The comparison checks that both plans use the same trip and park information. Side by side, it shows must-dos, activities, walking, waiting (your estimates vs assumed), meals, breaks, free time, start and finish times, feasibility and unknowns. It also spells out the trade-offs: more activities isn't treated as automatically better.
+7. **Save.** If the saved trip changes later (dates, resort, party, tickets or ticket rules), the itinerary shows exactly what changed. It keeps planning with the details it was made for until you press **Use the current trip details**; nothing is applied silently. Saving keeps the inputs (including your park information with its provenance), the plan, its score breakdown and the planner version. Planning again and saving adds a **new version**; earlier versions are never changed and can be reopened.
 
 The plan shows each day's park and window (and what it's based on), timed activities with walking, wait and duration, meals and breaks, must-do coverage, anything that didn't fit and why, conflicts, unknowns and assumptions, and every piece of information used with its status. A **fit score** breaks down into must-do coverage, other preferences, walking and backtracking, pacing, and data certainty. It measures fit with *your stated priorities*, not how good the vacation will be.
 
@@ -138,7 +138,7 @@ These become proposals you review before they apply, and the planner produces th
   - attractions you skip.
 
   An independent check re-verifies every plan; a violation makes the plan "not feasible" rather than showing it as valid.
-- **Must-dos are prioritized.** Ones that can't fit are listed with the reason; the plan is then marked "Some must-dos left out".
+- **Must-dos are prioritized, and favoured earlier in the day.** This is weighed against walking, never forced. A must-do that still lands late says why. Ones that can't fit are listed with the time they need; the plan is then marked "Some must-dos left out".
 - **Without park hours you entered, the plan is provisional.** It uses your planning window, and waits use your buffer. The plan is labelled provisional, and actual waits, show times, weather and closures will change the day.
 - **The result is the highest-scoring candidate found by a bounded search, not a proven optimum.** No crowd calendar is used, so no day of the week is claimed to be better.
 - **No Lightning Lane availability is ever assumed or checked, and nothing is booked.**
@@ -246,9 +246,16 @@ npm test             # unit, scenario, property, AI and monitoring tests (Vitest
 TEST_DATABASE_URL=postgresql://dvo:dvo@localhost:5432/dvo_test npm test   # also the PostgreSQL suites
 npm run typecheck    # TypeScript, strict mode
 npm run bench        # optimizer timings for default, wide and widest searches
+npm run perf         # itinerary planning, saving/reopening versions, history queries (PostgreSQL with DATABASE_URL)
+BASE_URL=http://localhost:3000 npm run e2e   # browser smoke test against a running app (needs Playwright)
 ```
 
-308 tests in total: 278 run without a database, and the 30 PostgreSQL tests run when `TEST_DATABASE_URL` is set.
+352 tests in total: 322 run without a database, and the 30 PostgreSQL tests run when `TEST_DATABASE_URL` is set. The browser smoke test checks:
+- no horizontal overflow at desktop and phone widths on every page;
+- the itinerary flow, from the demo to a saved second version;
+- planning from a saved trip, and the trip-change warning;
+- an assistant itinerary proposal;
+- cross-site write protection.
 
 The tests cover:
 
@@ -256,7 +263,7 @@ The tests cover:
 - **Rules:** hard constraints, budgets, flexible dates, trust partitioning, tie-breaks, savings and switching costs.
 - **New features:** payment schedules and cancellation exposure, ticket usability, DVC point stays, observation history.
 - **Importers:** the paste and bulk importers.
-- **Scenarios:** a known-scenario regression suite built from fictional, clearly labelled quotes.
+- **Scenarios:** a known-scenario regression suite built from fictional, clearly labelled quotes, including hand-checked family pricing, a tax-exclusive package with a promotion present, and how the best-value price score depends on the alternatives.
 - **Pruning:** a randomized property test proving that pruning never changes results.
 - **Monitoring (pure, no database):**
   - switching-cost calculations, including unknown cancellation conditions
@@ -279,6 +286,14 @@ The tests cover:
   - a randomized check that no invalid plan is presented as feasible; bounded search on a 15-day hopper trip
   - API validation, server-side re-planning on save, and versioning
   - saved itineraries in JSON (and older JSON files without itineraries)
+- **Security:** cross-site write protection, the scheduler secret, redaction of credentials, generic errors for unexpected failures.
+- **Itinerary scheduling (Milestone 6):**
+  - must-dos earlier, and an explanation when one is late;
+  - operating windows without idle mornings;
+  - evening shows only at entered times;
+  - catalog integrity, advisories and heights;
+  - lunch placement, hop-day transfers and breaks;
+  - narrow-screen rendering.
 - **AI layer (mocked providers, no network):**
   - natural-language parsing (basic mode)
   - patch application and schema validation
@@ -290,6 +305,7 @@ The tests cover:
   - missing configuration
   - Anthropic request shape and error mapping
   - answers about recorded price history and switching, with invented price drops rejected
+  - unsupported claims ("current price", "guaranteed", "available", "you have a reservation") are withheld; price freshness facts; ambiguity and malformed or failing providers
   - itinerary requests: basic-mode phrasings, validated patches (no reservation time the user didn't state), proposal/apply, auto-apply, comparisons, fallbacks, Claude request shape, explanations with invented times or durations rejected
 
 ## Project layout
@@ -304,7 +320,7 @@ src/
                        payments.ts (schedule & cancellation exposure), ticketUsage.ts (usability)
     optimizer/         optimize.ts (enumerate → constrain → bound → price → rank → award),
                        bound.ts (lower bounds for pruning), constraints.ts, scoring.ts
-  itinerary/           catalog.ts (parks, areas, attractions; approximate), types.ts (validated inputs with provenance, outputs),
+  itinerary/           catalog.ts (parks, areas, attractions with kind, schedule type, reported heights, advisories), types.ts (validated inputs with provenance, outputs),
                        context.ts (trip context, demo), engine.ts (allocation, scheduling, scoring, verification, comparison)
   db/                  PostgreSQL: pool, migrations, observation queries, JSON import
   monitoring/          fingerprint.ts (equivalent configurations), series.ts (history), detect.ts (change detection),
@@ -319,7 +335,8 @@ src/
                        /api/assistant, /api/conversations, /api/monitoring/*, /api/notifications/*,
                        /api/itinerary/{plan,context}, /api/itineraries/*)
   components/          React UI (prices/: price-data workflows; monitoring/; itinerary/: planner, plan view, known-info editor)
-scripts/               bench.ts, db-migrate.ts, import-json.ts, monitor.ts
+scripts/               bench.ts, perf.ts, e2e-smoke.cjs, db-migrate.ts, import-json.ts, monitor.ts
+src/proxy.ts           Same-origin protection for API writes
 tests/                 Vitest suites and hand-checkable fixtures (all prices fictional)
 docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones and status)
 ```
@@ -346,9 +363,26 @@ docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones 
 - **Imported history:** the JSON store kept only price, date, status and source for earlier observations, so other details of those observations are assumed unchanged (stated on each record).
 - **Itineraries:**
   - **No live park data.** No park hours, closures, wait times, crowd levels, show times, or park-reservation and Lightning Lane availability, because there is no authorized source. You enter what you know; everything else is unknown and labelled.
-  - **Approximate catalog.** About 40 long-running attractions with approximate durations and a schematic map for walking estimates. It may be out of date. Height and accessibility requirements, parades, fireworks and character meets are not modelled; add them as your own activities.
+  - **Curated, partly verified catalog.** 68 long-running attractions, shows and evening spectaculars. Membership was spot-checked against third-party guides on 2026-10-31; Disney's own pages and Wikipedia couldn't be fetched from the build environment.
+    - Durations and walking distances are estimates.
+    - Minimum heights are recorded only where guides agreed (labelled "reported, verify"); conflicting ones are unknown.
+    - Accessibility requirements and character meets are not modelled; add them as your own activities.
+    - Attractions reported as closing in 2026 are left out; other reported changes are shown as advisories.
   - **Simplified planning.** One planned hop per day, around midday. Early entry is used only when you enter it. Breakfast is not planned.
-  - **Bounded search.** A beam search over park-day allocations, then three route orderings per day: the best candidate found, not a proven optimum.
+  - **Bounded search.** A beam search over park-day allocations, then four route orderings per day: the best candidate found, not a proven optimum.
 - Single-user. No accounts.
+
+## Security and deployment
+
+This is a **single-user, local application**. Run it on your own computer or a private network.
+- **No authentication.** Anyone who can reach the server can read and change all data: prices, trips, conversations, itineraries, monitors and notification settings.
+- **Don't expose it to the public internet** without adding authentication in front of it, for example a reverse proxy with login, or a VPN. The lack of accounts makes it *unsuitable*, not suitable, for public deployment.
+- **What is protected:**
+  - API keys, the database URL, the SMTP URL and the cron secret stay on the server, and are redacted from logs and stored error messages.
+  - Unexpected errors return a generic message.
+  - Writes from other websites are refused (same-origin check, and no form-encoded bodies), so a page you visit can't change a locally running instance.
+  - `POST /api/monitoring/run` requires `MONITOR_CRON_SECRET` (constant-time comparison) and is disabled without it.
+  - All input is validated at the API boundary.
+- **Not provided:** rate limiting, audit logs, backups. Back up `data/local-store.json` or the PostgreSQL database yourself.
 
 For design decisions and the full calculation rules, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For status and next steps, see [docs/ROADMAP.md](docs/ROADMAP.md).

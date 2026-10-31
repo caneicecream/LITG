@@ -1,4 +1,6 @@
 import { guarded } from "@/lib/guarded";
+import { internalError, RequestError } from "@/lib/errors";
+import { DatabaseUnavailableError, SchemaOutOfDateError } from "@/db/pool";
 import { z } from "zod";
 import { getProvider } from "@/ai/providers/config";
 import { assistantDeps } from "@/ai/server";
@@ -36,7 +38,9 @@ async function handlePOST(req: Request) {
     return Response.json({ conversation });
   } catch (err) {
     if (err instanceof ConversationNotFound) return Response.json({ errors: [err.message] }, { status: 404 });
-    return Response.json({ errors: [err instanceof Error ? err.message : "Something went wrong"] }, { status: 400 });
+    if (err instanceof RequestError) return Response.json({ errors: [err.message] }, { status: 400 });
+    if (err instanceof DatabaseUnavailableError || err instanceof SchemaOutOfDateError) throw err; // → 503 via guarded
+    return internalError(err, "assistant");
   }
 }
 

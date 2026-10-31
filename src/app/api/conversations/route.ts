@@ -1,4 +1,6 @@
 import { guarded } from "@/lib/guarded";
+import { internalError, RequestError } from "@/lib/errors";
+import { DatabaseUnavailableError, SchemaOutOfDateError } from "@/db/pool";
 import { assistantDeps } from "@/ai/server";
 import { createConversation } from "@/ai/service";
 import { deleteConversation, getConversation, listConversations } from "@/data/store";
@@ -20,7 +22,9 @@ async function handlePOST(req: Request) {
     const conversation = await createConversation(assistantDeps(), { request: body.request as never, title: body.title, itinerary: body.itinerary });
     return Response.json({ conversation }, { status: 201 });
   } catch (err) {
-    return Response.json({ errors: [err instanceof Error ? err.message : "Invalid request"] }, { status: 400 });
+    if (err instanceof RequestError) return Response.json({ errors: [err.message] }, { status: 400 });
+    if (err instanceof DatabaseUnavailableError || err instanceof SchemaOutOfDateError) throw err; // → 503 via guarded
+    return internalError(err, "conversations");
   }
 }
 

@@ -307,3 +307,9 @@ button.suggest { font-size: 11px; font-weight: 500; padding: 3px 8px; border-rad
   .itinerary-table td:first-child { width: 64px; white-space: normal !important; }
   .itinerary-table td { padding: 6px 4px; }
 }
+
+/* ── Milestone 6: narrow-screen fixes and accessibility helpers ── */
+.grid2 > *, .grid3 > *, .split > * { min-width: 0; }
+input, select, textarea { min-width: 0; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }

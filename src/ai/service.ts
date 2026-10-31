@@ -1,6 +1,7 @@
+import { RequestError } from "@/lib/errors";
 import { randomUUID } from "node:crypto";
 import { defaultTripRequest } from "@/data/defaults";
-import { todayIso } from "@/domain/dates";
+import { daysBetween, todayIso } from "@/domain/dates";
 import { formatCents, type Cents } from "@/domain/money";
 import { optimize } from "@/domain/optimizer/optimize";
 import { parseTripRequest } from "@/domain/schema";
@@ -74,9 +75,9 @@ export async function createConversation(
   opts: { request?: TripRequest; title?: string; itinerary?: { input: unknown; savedId?: string | null; tripId?: string | null } } = {},
 ): Promise<Conversation> {
   const fromPlanner = opts.request ? parseTripRequest(opts.request) : null;
-  if (fromPlanner && !fromPlanner.ok) throw new Error(`Invalid request: ${fromPlanner.errors.join("; ")}`);
+  if (fromPlanner && !fromPlanner.ok) throw new RequestError(`Invalid request: ${fromPlanner.errors.join("; ")}`);
   const itin = opts.itinerary ? itineraryInputSchema.safeParse(opts.itinerary.input) : null;
-  if (itin && !itin.success) throw new Error(`Invalid itinerary: ${itin.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+  if (itin && !itin.success) throw new RequestError(`Invalid itinerary: ${itin.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   const at = nowIso(deps);
   const conv: Conversation = {
     id: randomUUID(),
@@ -220,8 +221,8 @@ export async function applyProposal(deps: AssistantDeps, conversationId: string,
   const msg = conv.messages.find((m) => m.id === messageId);
   if (msg?.itineraryProposal) return applyItineraryProposal(deps, conv, messageId, (c) => save(deps, c));
   const record = msg?.proposal;
-  if (!msg || !record) throw new Error("Proposal not found");
-  if (record.status !== "pending" || !record.preview) throw new Error(`This proposal can't be applied (${record.status}).`);
+  if (!msg || !record) throw new RequestError("Proposal not found");
+  if (record.status !== "pending" || !record.preview) throw new RequestError(`This proposal can't be applied (${record.status}).`);
   const question = [...conv.messages].reverse().find((m) => m.kind === "user" && m.at <= msg.at)?.text ?? "";
   conv.request = record.preview;
   conv.confirmed = [...new Set([...conv.confirmed, ...record.touched])];
@@ -246,7 +247,7 @@ export async function dismissProposal(deps: AssistantDeps, conversationId: strin
 export async function runRequest(deps: AssistantDeps, conversationId: string, request: unknown, reason: "form" | "restore"): Promise<Conversation> {
   const conv = await load(deps, conversationId);
   const parsed = parseTripRequest(request);
-  if (!parsed.ok) throw new Error(`Invalid request: ${parsed.errors.join("; ")}`);
+  if (!parsed.ok) throw new RequestError(`Invalid request: ${parsed.errors.join("; ")}`);
   const diff = diffRequests(conv.request, parsed.request, deps.catalog);
   conv.request = parsed.request;
   if (reason === "form") conv.confirmed = [...ALL_SECTIONS];
@@ -352,10 +353,23 @@ async function loadHistoryFacts(deps: AssistantDeps, request: TripRequest, resul
     const base = baselineConfiguration(request);
     const fps = "config" in base ? [fingerprint(configKey(base.config, request))] : [];
     const [observations, data] = await Promise.all([fps.length ? deps.loadObservations(fps) : [], deps.loadData({ includeIllustrative: request.data.includeIllustrative })]);
-    return historyFacts({ request, result, data, observations });
+    return [...freshnessFacts(data, request, result.today), ...historyFacts({ request, result, data, observations })];
   } catch {
     return ["Price history: recorded price history is unavailable right now (the database could not be reached)."];
   }
+}
+
+/** How old the stored prices are. A stored price is a past observation, never a live price. */
+export function freshnessFacts(data: PriceData, request: TripRequest, today: string): string[] {
+  const real = [...data.stayQuotes, ...data.roomRates, ...data.ticketPrices, ...data.diningPlanPrices, ...data.pointCharts, ...data.pointCosts]
+    .map((x) => x.provenance)
+    .filter((p) => p.status === "manual" || p.status === "verified");
+  if (!real.length) return ["Price freshness: none of your own prices are recorded, so results rely on estimates or illustrative data."];
+  const dates = real.map((p) => p.observedAt).sort();
+  const old = real.filter((p) => daysBetween(p.observedAt, today) > request.data.staleAfterDays).length;
+  return [
+    `Price freshness: your ${real.length} recorded price${real.length === 1 ? " was" : "s were"} observed between ${dates[0]} and ${dates[dates.length - 1]}; ${old} ${old === 1 ? "is" : "are"} older than ${request.data.staleAfterDays} days. Stored prices are past observations, not live prices; re-running the optimizer re-evaluates them and is not a new price check.`,
+  ];
 }
 
 function save(deps: AssistantDeps, conv: Conversation): Promise<Conversation> {
