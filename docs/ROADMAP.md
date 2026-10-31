@@ -76,6 +76,7 @@ Also changed:
 3. Per-entry tax jurisdiction override for generic off-property slots.
 4. ~~Milestone 3 (AI-assisted planning)~~ done; see below.
 5. ~~Milestone 4 (historical pricing and monitoring)~~ done; see below.
+6. ~~Milestone 5 (itinerary optimization)~~ done; see below.
 
 ## Milestone 3: AI-assisted planning (done, 2026-10-30)
 
@@ -122,10 +123,32 @@ Also changed:
 - *Email*: plain-text SMTP only; no unsubscribe links or delivery retries (a failed email is shown on the notification).
 - *Imported history*: older JSON observations kept only price, date, status and source, so other details are assumed unchanged (stated on each record).
 
-## Milestone 5: itinerary optimization
+## Milestone 5: itinerary optimization (done, 2026-10-31)
 
-Park hours, crowd estimates and Lightning Lane decisions, with verified vs predicted inputs kept distinct.
+| Item | Status | Notes |
+| --- | --- | --- |
+| Park-information model | ✅ | Park hours with optional early entry; attraction windows; closures; wait information (your estimate, prediction, or an observed wait kept for reference only); crowd estimates; park reservations; dining reservations; Lightning Lane return windows and rules. Every item carries source, entered/observed date and a status (verified, manual, estimated, predicted or illustrative; stale and unknown are derived). User entries can't be "verified". Validated with zod. |
+| Park and attraction catalog | ✅ | Four parks, their areas on a schematic map, and about 40 long-running attractions with approximate durations. Dated and labelled approximate. No hours, waits or crowds. |
+| Planning experience | ✅ | `/itinerary`: start from a saved trip, the current plan, or the labelled demo. Then trip review, parks, attractions (Must / Like / Maybe / Skip, plus your own activities), pace and preferences, and optional known information. Plan, review, edit and plan again, save and reopen. |
+| Deterministic planner | ✅ | Usable dates (trip, arrival/departure, ticket expiry, blocked dates, use window); bounded beam search for park-day allocation (pins, reservations, Park Hopper only when the ticket has it); day scheduling with travel, waits, meals, breaks, flexible time and fixed reservations; an independent constraint check. |
+| Scoring | ✅ | Must-do coverage, other preferences, walking and backtracking, pacing, and data certainty, weighted by your priorities. Documented and shown with what it measures. "Best candidate found", never "optimal". |
+| Uncertainty | ✅ | No hours → your planning window, provisional. No wait data → your buffer, labelled unknown. Crowd estimates (yours) only scale that buffer. Observed waits aren't forecasts. Stale entries flagged. |
+| Lightning Lane | ✅ | Return windows you hold are scheduled inside the window. Availability is never assumed, checked or booked. Rules are unknown unless entered. |
+| Park-day allocation | ✅ | Musts spread across parks, a rest day when preferred, the busiest day not first when asked, reservations honoured. Infeasible pins and reservations are explained. |
+| Assistant | ✅ | Itinerary proposals (basic mode and Claude) with the same review/apply/auto-apply model. Times are accepted only when the user stated them. Comparisons ("relaxed vs ride-focused", "one fewer park day") and explanations grounded in planner facts (times, minutes, counts and scores checked). Honest answers to current-facts questions. |
+| Results | ✅ | Day-by-day timeline with walking, wait and duration; meal windows and reservations; breaks; must-do coverage; unscheduled items and reasons; conflicts; information used with status; score breakdown; side-by-side comparison from the same facts. |
+| Persistence | ✅ | Saved itineraries keep inputs (with park-information snapshots), output, score breakdown, planner version and timestamps. Versions are append-only (immutable in PostgreSQL, migration 003). JSON files from before Milestone 5 still load. The JSON import covers itineraries. |
+| Performance | ✅ | Bounded search (21-day cap, beam width 60, 4 full schedules). A 15-day Park Hopper trip plans in well under a second. |
+| Tests | ✅ | 308 total (68 new): engine, persistence (JSON + PostgreSQL), API, assistant. |
 
-## Milestone 6: expansion
+**Deferred or limited**
+
+- *Live park data*: no authorized source for hours, closures, waits, crowds, show times, or reservation and Lightning Lane availability. Manual entry is the path, and no adapter is implemented.
+- *Catalog breadth*: a starter set of attractions with approximate durations; shows' performance times, parades, fireworks, height and accessibility requirements are not modelled.
+- *Breakfast and multi-hop days*: not planned (one hop per day, around midday).
+- *Weather, transport timetables*: not modelled; transfer and walking times are estimates.
+- *Live Claude verification*: as before, the provider is tested against a mocked SDK client only.
+
+## Milestone 6: expansion (not started)
 
 Only after the core has proven useful with real quotes.

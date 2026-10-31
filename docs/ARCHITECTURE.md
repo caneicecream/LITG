@@ -7,6 +7,7 @@
 | **Domain** (pricing + optimization) | `src/domain/` | Pure TypeScript with no I/O or framework imports. Calculates costs, checks promotion eligibility and hard constraints, enumerates and ranks configurations, computes savings. Fully deterministic, so the same inputs always give the same output. |
 | **Data** | `src/data/` | Catalog (structure), reference estimates, the illustrative dataset, the store facade (`store.ts`) with JSON and PostgreSQL backends (`backends/`), and a `PriceSource` registry that assembles `PriceData` for the optimizer. |
 | **Database** | `src/db/` | PostgreSQL pool, versioned migrations, the append-only observation table and the JSON import. Server-only; the domain never imports it. |
+| **Itinerary** | `src/itinerary/` | Park catalog, the park-information model with provenance, and the deterministic itinerary planner (pure, framework-free; consumes a validated trip context, never the price optimizer's internals). See *Itinerary planning*. |
 | **Monitoring** | `src/monitoring/` | Pure parts (configuration fingerprints, price series, change detection, switching-cost analysis) and the service that runs checks, schedules them and sends notifications. See *Price history and monitoring*. |
 | **App** | `src/app/`, `src/components/` | Next.js pages and API routes. The UI only collects a `TripRequest` and renders an `OptimizationResult`; it does no pricing of its own. |
 | **AI** | `src/ai/` | Interprets natural language into a reviewable patch to the `TripRequest`, and explains the optimizer's result from a facts digest. It never computes or states a price the optimizer didn't produce. See *AI-assisted planning*. |
@@ -216,6 +217,7 @@ apply ─▶ optimize(request) [+ optimize(variant) for each comparison] ─▶ 
 - **New resort or room:** add it to `src/data/catalog.ts`, and to the illustrative generator if demo coverage is wanted.
 - **AI provider:** see *AI-assisted planning* above.
 - **Authorized price adapter:** implement `ObservationAdapter` in `src/monitoring/adapters.ts` and register it. Its quotes are validated like user quotes, must match the tracked configuration exactly, are stored as `verified` observations with the adapter's limitations attached, and identical repeats create nothing. Never point an adapter at Disney's consumer website.
+- **Authorized park-information source:** implement `ParkInfoSource` in `src/itinerary/sources.ts` (none is registered). Its items must carry honest provenance (`verified` or `predicted`, source and retrieval time) and pass `parkInfoSchema`.
 - **Schema change:** add a migration to `MIGRATIONS` (never edit an applied one; checksums are verified) and bump nothing else.
 - **Optimizer rule change:** bump `ENGINE_VERSION` (`src/domain/optimizer/version.ts`) so monitoring labels the resulting total changes as recalculations, not price changes.
 
@@ -300,3 +302,67 @@ In-app always (bell with unread count, `/notifications`). Optional email via SMT
 | JSON import | Your earlier JSON history | Earlier observations kept only price, date, status and source; other fields are assumed unchanged (stated on each record). |
 | Authorized adapters | Interface only; **none registered** | Would need a contractual API (e.g. a travel-trade wholesaler). Disney's consumer site is never scraped or automated. |
 | Illustrative data | Demo prices | Never recorded as observations, never compared with real prices. |
+
+## Itinerary planning (Milestone 5)
+
+The itinerary planner consumes a **validated trip context** and produces a separate, explainable plan. It never changes prices or the trip. AI may interpret preferences and explain results; the deterministic planner enforces constraints and calculates scores.
+
+### Inputs (`itinerary/types.ts`, all zod-validated)
+
+- **Trip context** (`context.ts`), derived from a TripRequest's preferred plan: dates, party, resort, ticket option and admission days, and Park Hopper. Ticket usage rules come from a quote for exactly that stay or a product rule in the user's price data; they are null when unknown.
+- **Preferences:**
+  - parks, day pins, attraction choices (must / want / avoid), custom activities;
+  - pace, priority toggles, day window, arrival/departure-day limits, meal windows;
+  - midday rest, flexible afternoons, "busiest day not first", rest-day preference, hopping, early entry, Lightning Lane mode;
+  - wait buffer, mobility, park days to use.
+- **Park information**, each item with `provenance { status, source, observedAt }`:
+  - park hours (with optional early entry), attraction windows, closures;
+  - waits (`your_estimate`, `predicted`, or `observed`, which is reference only);
+  - crowd estimates, park reservations, dining reservations, Lightning Lane return windows, Lightning Lane rules.
+  - User entries are `manual`, `estimated` or `predicted`, never `verified`, which is reserved for an authorized adapter. `illustrative` is for the demo only. `stale` (older than 30 days by default) and `unavailable` are derived.
+- **Catalog** (`catalog.ts`): parks, areas with schematic coordinates (walking-minute units), and attractions with category, intensity and approximate duration. It is labelled estimated and dated, and contains no hours, waits or crowds.
+
+### Algorithm (`itinerary/engine.ts`)
+
+1. **Usable dates.** Exclude arrival and departure days unless the trip allows parks on them, plus dates after ticket expiry and blocked-out dates. The use-within window is enforced during allocation. Pins are validated first; impossible pins make the request infeasible with a reason.
+2. **Park-day allocation.** A beam search over dates, where each date can be no park, a park, or a hop (only with Park Hopper and when allowed).
+   - Constraints: ticket days, the use window, pins, commitments (dining, Lightning Lane and park reservations tie a date to a park; hop order follows commitment times), and reservations when required.
+   - Allocations are ranked by a cheap estimate: capacity vs must, want and optional demand, coverage of the requested parks, the hop penalty, "busiest day first", and the rest-day preference.
+   - Beam width 60; at most 21 days. The top 4 allocations are scheduled in full.
+3. **Day scheduling.** Three orderings per park day: priority-weighted nearest neighbour (with a revisit penalty, stronger with "avoid crossing the park"), and clockwise and counter-clockwise area sweeps. Each ordering is simulated minute by minute:
+   - walking between areas: schematic distance + 2 min, × 1.4 for slower mobility;
+   - waits: your estimate, then a prediction, then your buffer scaled by your crowd estimate;
+   - attraction windows and closures;
+   - fixed items: dining, Lightning Lane windows, midday rest, flexible afternoons. Overlapping fixed items are conflicts; preferences give way to reservations;
+   - meals placed in their windows, or covered by a reservation or the midday rest; a meal more than 2 hours late is dropped and reported;
+   - pace breaks; optional extras only up to the pace's busy-ness target (relaxed 55%, moderate 70%, packed 85% of the window).
+4. **Scoring** (0–100 per component; weights shift with your priorities):
+
+| Component | Base weight | Calculation |
+| --- | --- | --- |
+| Must-do coverage | 35 | scheduled ÷ total must-dos (including must-dos in parks you didn't choose) |
+| Other preferences | 20 (+15 "fit in as much as possible") | 70 × wants scheduled + 20 × requested parks visited + 10 × extras (vs 30% of extras available) |
+| Walking & backtracking | 15 (+15 minimize walking, +10 avoid crossing) | 100 × (1 − 2 × walking ÷ (walking + activity)) − 6 per backtrack (12 with "avoid crossing") |
+| Pacing & breaks | 20 (+15 keep it relaxed) | per day: 100 − 150 × (busy-ness above target) − 15 for a long stretch without a break − 10 per late meal; −15 if the busiest day is first when you asked otherwise |
+| Data certainty | 10 | 100 − 50 × (share of park days without entered hours) − 50 × (share of rides on an assumed wait) |
+
+   The total is the weighted mean. It measures fit with stated priorities and the share of known data, not vacation quality. The highest total among the scheduled candidates is returned as the best candidate found.
+5. **Independent verification** (`verifyItinerary`) re-checks the hard constraints on the result: ticket days, Park Hopper, use window, blocked dates, expiry, trip dates, reservations, overlaps (including travel), day windows, skipped attractions, closures, attraction windows, and parks. Any violation turns the plan into "not feasible" with the reasons. A randomized test runs this over many inputs.
+
+**Status:** *feasible* (hard constraints met, all must-dos placed), *partial* (some must-dos left out, each with a reason), or *infeasible*. A separate *provisional* flag is set when hours are unknown, waits are assumed, reservations are unresolved, or the plan is the demo.
+
+**Comparison** (`compareVariants`): the same inputs with different preference sets (relaxed vs ride-focused, or one fewer park day from the assistant). Results are summarized as must-dos, attractions, walking, breaks and park days, and "only in A / only in B".
+
+### Persistence
+
+`SavedItinerary { id, name, tripId, versions[] }`. Each version stores the validated input (including the park-information snapshot with provenance), the result (with score breakdown and `engineVersion`), a note and a timestamp.
+- **Append-only.** JSON appends to `itineraries` (an optional field, so older files still load). PostgreSQL migration 003 adds `itineraries` and `itinerary_versions`, with a trigger that forbids updates.
+- **Re-planning on save.** The server always re-plans from the inputs on save; a client-supplied result is never stored.
+- **Old versions stay as generated.** When the planner version changes, they keep their recorded `engineVersion`, and the UI offers to plan again as a new version.
+
+### Assistant integration (`src/ai/itinerary/`)
+
+- **Routing.** Itinerary messages are detected deterministically; trip-pricing messages still go to the trip flow.
+- **Proposals.** An `ItineraryPatch` (all fields nullable) comes from the basic-mode interpreter or from Claude (`interpretItinerary`, structured output). `applyItineraryPatch` validates ids, trip dates and ticket limits. It accepts dining and Lightning Lane times only when they appear in the user's messages, and re-validates the whole input. Proposals use the existing review/apply/dismiss and auto-apply model.
+- **Planning and explaining.** Applying runs the planner (plus up to two comparison variants) and builds itinerary facts. Explanations must cite facts, and every number in them (times, minutes, counts, scores) must appear in the facts. Otherwise the deterministic fact list is shown, with the reason.
+- **Current facts.** Questions about park hours, waits, crowds or availability get an honest "not available" with the manual-entry path.

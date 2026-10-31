@@ -19,6 +19,8 @@ It prices each combination deterministically and ranks the results. It shows:
 
 You can also **plan in conversation** on the **Assistant** page ("two adults, six or seven nights, preferably Pop Century, under $5,000"). The assistant turns your words into structured changes you review, the optimizer prices them, and the assistant explains the optimizer's actual results. The AI never produces a price.
 
+Once a trip is chosen, the **Itinerary** page plans the park days: which park each day, what to do in what order, with meals, breaks and estimated walking. A deterministic planner builds the schedule from your preferences and whatever park information you enter. The app has no live park hours, waits, crowds or availability, and says so on every plan.
+
 > **Data integrity first.** Every price carries a status: *Verified*, *Manually entered*, *Estimated*, *Illustrative*, *Unavailable* or *Stale*. The bundled dataset is **illustrative**: plausible numbers for demonstrating the optimizer, **not real prices or offers**. Illustrative results are never ranked against real quotes, and incomplete totals are never ranked against complete ones.
 
 ## Quick start
@@ -93,6 +95,53 @@ Refine conversationally: "one more night", "arrive a day earlier", "switch to Al
 You can also edit the plan directly ("Edit plan" or "Open in full planner"), restore any earlier version from the conversation, and switch between saved conversations. Conversations are saved locally with their plan, latest results and history.
 
 **Without an API key** the assistant runs in **basic mode**. A small deterministic interpreter understands phrases like the ones above, and explanations are the optimizer's facts. The planner itself never needs a key.
+
+## Planning the park days (itineraries)
+
+Open **Itinerary** and start from a saved trip, from your current plan on Plan & compare, or from the **demo** (a fictional trip with illustrative hours and waits, clearly labelled). The trip's preferred plan supplies the dates, party, resort and ticket.
+
+1. **Your trip.** Dates, party, resort, ticket (admission days, Park Hopper or not) and any recorded ticket rules: use-within window, expiration, blocked dates, park-reservation requirement. Unknown rules are shown as unknown, never assumed.
+2. **Parks.** Tick the parks you want. Optionally fix specific days to a park, or to a rest day.
+3. **Attractions.** Mark each attraction *Must*, *Like*, *Maybe* (an extra if there's time) or *Skip*, and add your own activities. Nothing needs to be filled in to try it.
+4. **Pace and preferences.**
+   - Pace: relaxed, moderate or packed.
+   - Priorities: minimize walking, avoid crossing the park, fit in as much as possible, keep it relaxed.
+   - Optional: midday rest, keep 2–4 pm free, not the busiest day first, rest day.
+   - Park hopping (only if the ticket has it).
+   - Day start and end, meal windows, mobility, and the wait buffer used when a wait is unknown.
+5. **What you already know (optional).** Park hours, dining reservations, Lightning Lane return windows you hold, park reservations, closures, your wait estimates, and crowd estimates. Each entry records its source and when you entered it, and is marked "You entered" or "Your estimate", never "Verified".
+6. **Plan my days** or **Compare relaxed vs ride-focused.** Review the plan, edit anything, and plan again; unrelated choices are kept.
+7. **Save.** Saving keeps the inputs (including your park information with its provenance), the plan, its score breakdown and the planner version. Planning again and saving adds a **new version**; earlier versions are never changed and can be reopened.
+
+The plan shows each day's park and window (and what it's based on), timed activities with walking, wait and duration, meals and breaks, must-do coverage, anything that didn't fit and why, conflicts, unknowns and assumptions, and every piece of information used with its status. A **fit score** breaks down into must-do coverage, other preferences, walking and backtracking, pacing, and data certainty. It measures fit with *your stated priorities*, not how good the vacation will be.
+
+**Plan with the assistant** opens a conversation about the itinerary. Examples:
+- "Build a relaxed four-day plan."
+- "Minimize walking and avoid crossing the park repeatedly."
+- "Keep our afternoons flexible."
+- "Move the most demanding day away from our arrival day."
+- "Seven Dwarfs and Remy are must-dos, skip TRON."
+- "Add our dinner reservation at 6:30 pm on Feb 3 at EPCOT."
+- "What would we lose if we removed a park day?"
+- "Compare a ride-focused plan with a relaxed plan."
+
+These become proposals you review before they apply, and the planner produces the plan. Asked for current facts ("what are the park hours?"), the assistant says it doesn't have them and points to manual entry.
+
+**What the planner can and can't promise**
+
+- **Hard constraints are always met, or the plan says it can't meet them.** These include:
+  - trip dates, ticket days, use window, expiration and blocked dates;
+  - no park hopping without a Park Hopper ticket;
+  - park reservations and hours you entered;
+  - attraction windows and closures;
+  - no overlapping activities;
+  - attractions you skip.
+
+  An independent check re-verifies every plan; a violation makes the plan "not feasible" rather than showing it as valid.
+- **Must-dos are prioritized.** Ones that can't fit are listed with the reason; the plan is then marked "Some must-dos left out".
+- **Without park hours you entered, the plan is provisional.** It uses your planning window, and waits use your buffer. The plan is labelled provisional, and actual waits, show times, weather and closures will change the day.
+- **The result is the highest-scoring candidate found by a bounded search, not a proven optimum.** No crowd calendar is used, so no day of the week is claimed to be better.
+- **No Lightning Lane availability is ever assumed or checked, and nothing is booked.**
 
 ## Database and monitoring
 
@@ -199,7 +248,7 @@ npm run typecheck    # TypeScript, strict mode
 npm run bench        # optimizer timings for default, wide and widest searches
 ```
 
-240 tests in total: 214 run without a database, and the 26 PostgreSQL tests run when `TEST_DATABASE_URL` is set.
+308 tests in total: 278 run without a database, and the 30 PostgreSQL tests run when `TEST_DATABASE_URL` is set.
 
 The tests cover:
 
@@ -219,7 +268,17 @@ The tests cover:
   - append-only and duplicate observations
   - JSON import: dry run, history, idempotence, no overwrites, broken files
   - monitoring end to end: checks, scheduled runs without double runs, notifications and dedupe, email success and failure, adapters
+  - saved itineraries: versions, immutability, link to trips, JSON import
   - failure handling: database down, not configured
+- **Itineraries (pure, no database):**
+  - dates, tickets and park days; Park Hopper; operating hours and early entry; attraction windows and closures
+  - no overlaps, with travel time between activities; meals and breaks; must-dos and exclusions; hard vs soft constraints
+  - infeasible requests; missing, stale and illustrative data; user entries can't claim "verified"
+  - waits and crowds as uncertain inputs; Lightning Lane windows and unknown availability; park-day allocation
+  - deterministic scoring and reproducibility; relaxed vs ride-focused comparison
+  - a randomized check that no invalid plan is presented as feasible; bounded search on a 15-day hopper trip
+  - API validation, server-side re-planning on save, and versioning
+  - saved itineraries in JSON (and older JSON files without itineraries)
 - **AI layer (mocked providers, no network):**
   - natural-language parsing (basic mode)
   - patch application and schema validation
@@ -231,6 +290,7 @@ The tests cover:
   - missing configuration
   - Anthropic request shape and error mapping
   - answers about recorded price history and switching, with invented price drops rejected
+  - itinerary requests: basic-mode phrasings, validated patches (no reservation time the user didn't state), proposal/apply, auto-apply, comparisons, fallbacks, Claude request shape, explanations with invented times or durations rejected
 
 ## Project layout
 
@@ -244,6 +304,8 @@ src/
                        payments.ts (schedule & cancellation exposure), ticketUsage.ts (usability)
     optimizer/         optimize.ts (enumerate → constrain → bound → price → rank → award),
                        bound.ts (lower bounds for pruning), constraints.ts, scoring.ts
+  itinerary/           catalog.ts (parks, areas, attractions; approximate), types.ts (validated inputs with provenance, outputs),
+                       context.ts (trip context, demo), engine.ts (allocation, scheduling, scoring, verification, comparison)
   db/                  PostgreSQL: pool, migrations, observation queries, JSON import
   monitoring/          fingerprint.ts (equivalent configurations), series.ts (history), detect.ts (change detection),
                        switching.ts (switching costs), service.ts (checks, scheduling), notify.ts, adapters.ts
@@ -251,10 +313,12 @@ src/
                        entrySchema.ts (validation), observations.ts (re-check history),
                        importers/ (paste-quote and bulk ticket parsers)
   ai/                  The assistant: types.ts (proposal schema), patch.ts (apply/diff/describe), digest.ts (optimizer facts),
-                       grounding.ts (figure checks), prompts.ts, service.ts (workflow), providers/ (anthropic, rules, config)
+                       grounding.ts (figure checks), prompts.ts, service.ts (workflow), providers/ (anthropic, rules, config),
+                       itinerary/ (itinerary proposals, basic-mode interpreter, planner facts, workflow)
   app/                 Next.js pages and API routes (/api/optimize, /api/prices, /api/prices/recheck, /api/trips,
-                       /api/assistant, /api/conversations, /api/monitoring/*, /api/notifications/*)
-  components/          React UI (components/prices/ holds the price-data workflows)
+                       /api/assistant, /api/conversations, /api/monitoring/*, /api/notifications/*,
+                       /api/itinerary/{plan,context}, /api/itineraries/*)
+  components/          React UI (prices/: price-data workflows; monitoring/; itinerary/: planner, plan view, known-info editor)
 scripts/               bench.ts, db-migrate.ts, import-json.ts, monitor.ts
 tests/                 Vitest suites and hand-checkable fixtures (all prices fictional)
 docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones and status)
@@ -272,7 +336,7 @@ docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones 
 - **Assistant:**
   - The Claude provider has been tested only against a mocked SDK client in this environment; no live API call has been made.
   - Basic mode understands a limited set of phrasings.
-  - The assistant can't express things the optimizer doesn't model: several rooms, flights, per-day park plans.
+  - The assistant can't express things the optimizer doesn't model: several rooms, flights. (Park days are planned on the Itinerary page.)
   - Explanations deliberately won't state figures the optimizer didn't produce, even when they are simple arithmetic.
 - **Monitoring:**
   - It only knows the prices you record. It can't see live prices or availability: there is no authorized automatic source (the adapter interface exists, with none registered).
@@ -280,6 +344,11 @@ docs/                  ARCHITECTURE.md (design & rules), ROADMAP.md (milestones 
   - The tracked configuration is the trip's preferred plan.
   - Switching analysis assumes cancel-and-rebook; Disney can sometimes modify a booking or apply an offer instead.
 - **Imported history:** the JSON store kept only price, date, status and source for earlier observations, so other details of those observations are assumed unchanged (stated on each record).
+- **Itineraries:**
+  - **No live park data.** No park hours, closures, wait times, crowd levels, show times, or park-reservation and Lightning Lane availability, because there is no authorized source. You enter what you know; everything else is unknown and labelled.
+  - **Approximate catalog.** About 40 long-running attractions with approximate durations and a schematic map for walking estimates. It may be out of date. Height and accessibility requirements, parades, fireworks and character meets are not modelled; add them as your own activities.
+  - **Simplified planning.** One planned hop per day, around midday. Early entry is used only when you enter it. Breakfast is not planned.
+  - **Bounded search.** A beam search over park-day allocations, then three route orderings per day: the best candidate found, not a proven optimum.
 - Single-user. No accounts.
 
 For design decisions and the full calculation rules, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). For status and next steps, see [docs/ROADMAP.md](docs/ROADMAP.md).

@@ -301,3 +301,9 @@ button.suggest { font-size: 11px; font-weight: 500; padding: 3px 8px; border-rad
 .unread { font-weight: 600; }
 .split { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 @media (max-width: 700px) { .split { grid-template-columns: 1fr; } }
+.itinerary-table .chip { white-space: normal; text-align: left; }
+.itinerary-table td { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  .itinerary-table td:first-child { width: 64px; white-space: normal !important; }
+  .itinerary-table td { padding: 6px 4px; }
+}

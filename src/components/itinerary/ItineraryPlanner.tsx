@@ -140,8 +140,18 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
     if (!input) return;
     setBusy(true);
     try {
+      // The conversation's trip plan matches the itinerary's trip when it came from a saved trip or the planner.
+      let request: unknown = undefined;
+      if (tripId) request = (await fetch(`/api/trips?id=${encodeURIComponent(tripId)}`).then((r) => (r.ok ? r.json() : null)))?.trip?.request;
+      else if (input.context.source.kind === "request") {
+        try {
+          request = JSON.parse(localStorage.getItem(PLANNER_DRAFT_KEY) ?? "null") ?? undefined;
+        } catch {
+          /* none */
+        }
+      }
       const r = await json<{ conversation: { id: string } }>(
-        await fetch("/api/conversations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ itinerary: { input, savedId: saved?.id ?? null, tripId }, title: `Itinerary: ${name || input.context.source.label}` }) }),
+        await fetch("/api/conversations", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request, itinerary: { input, savedId: saved?.id ?? null, tripId }, title: `Itinerary: ${name || input.context.source.label}` }) }),
       );
       location.href = `/assistant?c=${r.conversation.id}`;
     } catch (e) {

@@ -338,7 +338,8 @@ function waitFor(pc: PlanContext, a: Activity, date: IsoDate): { min: number; ba
   const e = entries.find((w) => w.date === date) ?? entries.find((w) => w.date === null);
   if (e) {
     const st = effectiveStatus(e.provenance, pc.today, pc.staleAfterDays);
-    return { min: e.minutes, basis: e.kind === "predicted" ? "predicted" : "your_estimate", label: { label: `Wait ${e.minutes} min (${e.kind === "predicted" ? "predicted" : "estimate"}: ${e.provenance.source})`, status: st } };
+    const what = e.provenance.status === "illustrative" ? "illustrative demo value" : e.kind === "predicted" ? "prediction" : "your estimate";
+    return { min: e.minutes, basis: e.kind === "predicted" ? "predicted" : "your_estimate", label: { label: `Wait ${e.minutes} min (${what})`, status: st } };
   }
   const crowd = pc.input.parkInfo.crowds.find((c) => c.date === date && c.parkId === a.parkId);
   const factor = crowd ? CROWD_FACTOR[crowd.level] : 1;
@@ -541,7 +542,8 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
         meals.splice(meals.indexOf(m), 1);
         mealsDone[m] = true;
         const brk = fixed.find((f) => f.item.kind === "break");
-        if (m === "lunch" && brk && !fixed.some((f) => f.item.kind === "dining" && f.start >= toMin(w.start) - 60 && f.start <= toMin(w.end))) brk.item.notes = [...brk.item.notes, "Lunch during your midday rest."];
+        const LUNCH_NOTE = "Lunch during your midday rest.";
+        if (m === "lunch" && brk && !brk.item.notes.includes(LUNCH_NOTE) && !fixed.some((f) => f.item.kind === "dining" && f.start >= toMin(w.start) - 60 && f.start <= toMin(w.end))) brk.item.notes = [...brk.item.notes, LUNCH_NOTE];
         continue;
       }
       // A meal more than two hours past its window is dropped (and reported) rather than eaten at an odd hour.
@@ -612,7 +614,8 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
         priority: a.priority,
         basis: [
           ...(plan.wait.label ? [plan.wait.label] : []),
-          a.custom ? { label: "Your activity", status: "manual" as const } : { label: `Duration ~${a.durationMin} min (${CATALOG_PROVENANCE.source})`, status: "estimated" as const },
+          ...(a.category === "show" && !attractionOpen(pc, a, date).window ? [{ label: "Show times unknown: check the schedule", status: "unavailable" as const }] : []),
+          a.custom ? { label: "Your activity", status: "manual" as const } : { label: `~${a.durationMin} min (catalog estimate)`, status: "estimated" as const },
         ],
         notes: area ? [] : ["Location unknown"],
       });
@@ -1120,6 +1123,9 @@ function buildFromAllocation(pc: PlanContext, slots: Slot[], pool0: Activity[]):
 
   const assumptions: string[] = [];
   const unknowns: string[] = [];
+  if (pc.parkDaysAllowed > parkDays.length && parkDays.length > 0 && !coverage.must.missing.length) {
+    assumptions.push(`Uses ${parkDays.length} of ${pc.parkDaysAllowed} available park days: everything you chose fits, and the other days are left free. Add parks or attractions, or fix days, to use more.`);
+  }
   const unknownHours = parkDays.filter((d) => d.window.basis === "planning_window");
   if (unknownHours.length) unknowns.push(`Park hours are not entered for ${unknownHours.length} park day${unknownHours.length === 1 ? "" : "s"}: those days use your planning window (${prefs.dayStart}–${prefs.dayEnd}). Real hours may be shorter or longer.`);
   if (parkDays.some((d) => d.window.basis === "illustrative_hours")) assumptions.push("DEMONSTRATION: park hours and waits are illustrative, not real operating schedules or current waits.");

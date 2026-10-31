@@ -225,7 +225,11 @@ function DayCard({ d }: { d: DayPlan }) {
                   {i.priority === "must" && <span className="chip chip-award" style={{ marginLeft: 6 }}>Must-do</span>}
                   {i.priority === "want" && <span className="chip chip-plain" style={{ marginLeft: 6 }}>Would like</span>}
                   <div className="small muted">
-                    {[i.travelMin ? `${i.travelMin} min walk/transfer before` : null, i.waitMin ? `${i.waitMin} min wait (${i.waitBasis === "assumed_buffer" ? "assumed" : i.waitBasis === "your_estimate" ? "your estimate" : i.waitBasis === "lightning_lane" ? "Lightning Lane, assumed" : i.waitBasis})` : null, i.kind === "attraction" || i.kind === "lightning_lane" ? `~${i.durationMin} min experience` : null]
+                    {[i.travelMin ? `${i.travelMin} min walk/transfer before` : null, i.waitMin
+                        ? i.waitBasis === "none"
+                          ? `arrive ~${i.waitMin} min early (assumed)`
+                          : `${i.waitMin} min wait (${i.waitBasis === "assumed_buffer" ? "assumed" : i.waitBasis === "your_estimate" ? "estimate" : i.waitBasis === "lightning_lane" ? "Lightning Lane, assumed" : i.waitBasis})`
+                        : null, i.kind === "attraction" || i.kind === "lightning_lane" ? `~${i.durationMin} min experience` : null]
                       .filter(Boolean)
                       .join(" · ")}
                   </div>

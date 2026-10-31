@@ -290,6 +290,30 @@ export function AssistantPage() {
       </section>
 
       <section className="stack" style={{ gap: 16, minWidth: 0 }}>
+        {conv?.itinerary && (
+          <div className="card card-pad stack" data-testid="itinerary-panel">
+            <div className="row">
+              <h2>Itinerary</h2>
+              <span className="small muted">Planned by deterministic rules; the assistant only proposes preference changes.</span>
+              <span className="spacer" />
+              <button type="button" onClick={openItinerary}>
+                Open in itinerary planner
+              </button>
+            </div>
+            {conv.itinerary.lastComparison ? (
+              <CompareView variants={conv.itinerary.lastComparison} summary={[]} />
+            ) : conv.itinerary.lastResult ? (
+              <ItineraryView it={conv.itinerary.lastResult} compact />
+            ) : (
+              <p className="small muted">No itinerary yet. Ask for one (“Build a relaxed plan”) or apply a proposed change.</p>
+            )}
+          </div>
+        )}
+        {conv?.itinerary && (
+          <p className="small muted">
+            Itinerary for {conv.itinerary.input.context.source.label}: {conv.itinerary.input.context.arrival} → {conv.itinerary.input.context.departure}. Trip-pricing questions (nights, resorts, budget) use the trip plan below.
+          </p>
+        )}
         {conv ? (
           <div className="card card-pad stack" data-testid="plan-summary">
             <div className="row">
@@ -375,25 +399,6 @@ export function AssistantPage() {
           </div>
         )}
 
-        {conv?.itinerary && (
-          <div className="card card-pad stack" data-testid="itinerary-panel">
-            <div className="row">
-              <h2>Itinerary</h2>
-              <span className="small muted">Planned by deterministic rules; the assistant only proposes preference changes.</span>
-              <span className="spacer" />
-              <button type="button" onClick={openItinerary}>
-                Open in itinerary planner
-              </button>
-            </div>
-            {conv.itinerary.lastComparison ? (
-              <CompareView variants={conv.itinerary.lastComparison} summary={[]} />
-            ) : conv.itinerary.lastResult ? (
-              <ItineraryView it={conv.itinerary.lastResult} compact />
-            ) : (
-              <p className="small muted">No itinerary yet. Ask for one (“Build a relaxed plan”) or apply a proposed change.</p>
-            )}
-          </div>
-        )}
         {conv?.lastResult ? (
           <Results result={conv.lastResult} loadDetail={loadDetail} />
         ) : conv && !conv.itinerary ? (

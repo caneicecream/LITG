@@ -76,7 +76,8 @@ export async function sendItineraryMessage(deps: AssistantDeps, conv: Conversati
   });
   // Replies may not state times or durations the planner didn't produce.
   let reply = proposal.reply.trim();
-  if (reply && checkItineraryNumbers(reply, texts.map((t, i) => ({ id: `U${i}`, text: t }))).length) reply = "Here's what I understood. Times and durations come from the planner once the changes are applied.";
+  const allowed = [...texts, ...applied.diff, ...comparisons.flatMap((c) => [c.label, ...c.diff])].map((t, i) => ({ id: `U${i}`, text: t }));
+  if (reply && checkItineraryNumbers(reply, allowed).length) reply = "Here's what I understood. Times and durations come from the planner once the changes are applied.";
   const extra = [...(proposal.unsupported.length ? proposal.unsupported : []), ...proposal.clarifications];
   const changes = applied.diff.length > 0 || comparisons.length > 0 || applied.errors.length > 0;
   if (changes) {
