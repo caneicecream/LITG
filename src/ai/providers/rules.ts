@@ -2,7 +2,8 @@ import { matchByName } from "@/data/importers/values";
 import { addDays, todayIso } from "@/domain/dates";
 import type { Catalog, ResortTier, TicketOption } from "@/domain/types";
 import { EMPTY_PATCH, type Proposal, type RequestPatch } from "../types";
-import type { AiProvider, InterpretInput } from "./provider";
+import { interpretItineraryWithRules } from "../itinerary/rules";
+import type { AiProvider, InterpretInput, ItineraryInterpretInput } from "./provider";
 
 /**
  * Basic mode: a small, deterministic interpreter used when no AI provider is
@@ -250,6 +251,9 @@ export class RulesProvider implements AiProvider {
   constructor(private readonly catalog?: Catalog) {}
   async interpret(input: InterpretInput): Promise<unknown> {
     return interpretWithRules(input);
+  }
+  async interpretItinerary(input: ItineraryInterpretInput): Promise<unknown> {
+    return interpretItineraryWithRules(input.message, input.input);
   }
   async explain(): Promise<null> {
     return null;

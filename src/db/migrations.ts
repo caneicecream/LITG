@@ -141,4 +141,38 @@ CREATE TABLE app_settings (
 );
 `,
   },
+  {
+    version: "003",
+    name: "itineraries with append-only versions",
+    sql: `
+CREATE TABLE itineraries (
+  id          text PRIMARY KEY,
+  name        text NOT NULL,
+  trip_id     text REFERENCES trips(id) ON DELETE SET NULL,
+  created_at  timestamptz NOT NULL,
+  updated_at  timestamptz NOT NULL
+);
+
+CREATE TABLE itinerary_versions (
+  itinerary_id    text NOT NULL REFERENCES itineraries(id) ON DELETE CASCADE,
+  version         int NOT NULL,
+  created_at      timestamptz NOT NULL,
+  note            text NOT NULL,
+  engine_version  text NOT NULL,
+  input           jsonb NOT NULL,   -- validated preferences, trip context and park information (with provenance)
+  result          jsonb NOT NULL,   -- the itinerary with its score breakdown
+  PRIMARY KEY (itinerary_id, version)
+);
+
+-- A saved version is never rewritten (deleting the whole itinerary is allowed).
+CREATE FUNCTION forbid_itinerary_version_updates() RETURNS trigger AS $$
+BEGIN
+  RAISE EXCEPTION 'itinerary_versions are immutable (attempted %)', TG_OP;
+END
+$$ LANGUAGE plpgsql;
+CREATE TRIGGER itinerary_versions_immutable
+  BEFORE UPDATE ON itinerary_versions
+  FOR EACH ROW EXECUTE FUNCTION forbid_itinerary_version_updates();
+`,
+  },
 ];

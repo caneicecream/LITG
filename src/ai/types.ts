@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Cents } from "@/domain/money";
 import type { OptimizationResult, TripRequest } from "@/domain/types";
+import type { Itinerary, ItineraryInput } from "@/itinerary/types";
 
 /**
  * The AI layer's contract. The model never returns prices, totals or
@@ -196,7 +197,27 @@ export interface ProposalRecord {
   status: "pending" | "applied" | "dismissed" | "invalid";
 }
 
-export type MessageKind = "user" | "reply" | "proposal" | "result" | "explanation" | "error" | "notice";
+export type MessageKind = "user" | "reply" | "proposal" | "result" | "explanation" | "error" | "notice" | "itinerary_proposal" | "itinerary_result";
+
+/** A proposed change to the itinerary preferences or known park information (reviewed before it applies). */
+export interface ItineraryProposalRecord {
+  /** The validated input the change would produce (null when invalid). */
+  preview: ItineraryInput | null;
+  diff: string[];
+  errors: string[];
+  warnings: string[];
+  comparisons: { label: string; input: ItineraryInput | null; diff: string[]; errors: string[] }[];
+  status: "pending" | "applied" | "dismissed" | "invalid";
+}
+
+/** The itinerary a conversation is planning (present once itinerary planning starts). */
+export interface ItineraryState {
+  input: ItineraryInput;
+  savedId: string | null;
+  tripId: string | null;
+  lastResult: Itinerary | null;
+  lastComparison: { label: string; differs: string[]; itinerary: Itinerary }[] | null;
+}
 
 export interface ConversationMessage {
   id: string;
@@ -214,6 +235,9 @@ export interface ConversationMessage {
     variants: { label: string; summary: RunSummary | null; error?: string }[];
     diff: string[];
   };
+  itineraryProposal?: ItineraryProposalRecord;
+  /** For itinerary results: what was planned (summary; the full plan is in the conversation's itinerary state). */
+  itineraryRun?: { headline: string; status: Itinerary["status"]; provisional: boolean; score: number | null; comparison: string[] };
   /** For explanations: facts the text is grounded in, and whether the AI text passed the grounding check. */
   explanation?: { facts: Fact[]; cited: string[]; grounded: "ai" | "deterministic"; rejectedReason?: string };
 }
@@ -230,4 +254,6 @@ export interface Conversation {
   lastResult: OptimizationResult | null;
   /** Variant results of the latest run, summarized. */
   lastVariants: { label: string; summary: RunSummary | null; error?: string }[];
+  /** Itinerary planning (Milestone 5); absent in older conversations. */
+  itinerary?: ItineraryState;
 }

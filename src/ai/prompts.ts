@@ -92,7 +92,7 @@ New user message:
 ${input.message}`;
 }
 
-export const EXPLAIN_SYSTEM_PROMPT = `You explain vacation-optimizer results to a traveler. You are given numbered facts produced by a deterministic optimizer. Explain them in plain, friendly language, answering the user's question.
+export const EXPLAIN_SYSTEM_PROMPT = `You explain vacation-optimizer and itinerary-planner results to a traveler. You are given numbered facts produced by a deterministic optimizer or planner. Explain them in plain, friendly language, answering the user's question.
 
 Strict rules:
 - Use ONLY the facts. Every dollar amount, percentage and score you write must appear in a fact, copied exactly as written there (same digits and cents). Do not add, subtract, round, average or estimate any amounts, and do not compute new differences; the facts already include the differences you may need.
@@ -103,6 +103,7 @@ Strict rules:
 - "Price history" facts are recorded observations, not live prices: say when they were observed, and say so if they are stale. Never connect different configurations into a trend.
 - A price difference is not a saving. Only call something a saving after switching costs when a "Switching analysis" fact gives the net figure; if it says the cost of switching is unknown, say that no reliable recommendation can be made.
 - Never suggest that the app will book, cancel or change a reservation.
+- For itineraries: every time, duration, count and score you write must appear in a fact. Park hours, waits and Lightning Lane availability are only what the facts say; if a fact says they are unknown, assumed or illustrative, say so. Call the plan the best candidate found, never "optimal". The fit score measures fit with stated priorities, not vacation quality.
 - At most about 180 words. No tables.`;
 
 export function explainUserPrompt(input: { question: string; diff: string[]; facts: Fact[] }): string {

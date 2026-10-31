@@ -9,6 +9,7 @@ const LINKS = [
   { href: "/assistant", label: "Assistant" },
   { href: "/prices", label: "Price data" },
   { href: "/trips", label: "Saved trips" },
+  { href: "/itinerary", label: "Itinerary" },
   { href: "/monitoring", label: "Monitoring" },
 ];
 

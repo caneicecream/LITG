@@ -132,6 +132,75 @@ export function MessageView({
     );
   }
 
+  if (m.kind === "itinerary_proposal" && m.itineraryProposal) {
+    const p = m.itineraryProposal;
+    return (
+      <div className={`card proposal proposal-${p.status}`} data-testid="itinerary-proposal">
+        <div className="row">
+          <b>Proposed itinerary changes</b>
+          <span className={`chip ${p.status === "pending" ? "chip-estimated" : p.status === "applied" ? "chip-manual" : p.status === "invalid" ? "chip-unavailable" : "chip-plain"}`}>{p.status}</span>
+          <span className="spacer" />
+          <span className="small muted">{m.source === "rules" ? "basic mode" : "AI interpretation"}</span>
+        </div>
+        {m.text && <div className="pre small">{m.text}</div>}
+        {p.diff.length > 0 && (
+          <ul className="diff">
+            {p.diff.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+        )}
+        {p.comparisons.length > 0 && (
+          <div className="small">
+            <b>Plan side by side:</b>
+            <ul className="diff">
+              {p.comparisons.map((c) => (
+                <li key={c.label}>
+                  {c.label}
+                  {c.diff.length ? `: ${c.diff.join("; ")}` : ""}
+                  {c.errors.length ? <span className="save-neg"> — {c.errors.join("; ")}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {p.errors.length > 0 && <div className="banner banner-error small">Can't apply: {p.errors.join("; ")}</div>}
+        {p.status === "pending" && (
+          <div className="row">
+            <button type="button" className="primary" disabled={busy} onClick={() => onApply(m.id)}>
+              Apply & plan
+            </button>
+            <button type="button" disabled={busy} onClick={() => onDismiss(m.id)}>
+              Dismiss
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (m.kind === "itinerary_result" && m.itineraryRun) {
+    const r = m.itineraryRun;
+    return (
+      <div className="card result-msg" data-testid="itinerary-result">
+        <div className="row">
+          <b>Itinerary</b>
+          <span className="chip chip-plain">planned by the itinerary planner</span>
+          {r.provisional && <span className="chip chip-stale">Provisional</span>}
+        </div>
+        <div className="small">{m.text}</div>
+        {r.score !== null && <div className="small muted">Fit with your priorities: {r.score}/100 (not a measure of vacation quality).</div>}
+        {r.comparison.length > 0 && (
+          <ul className="notices small">
+            {r.comparison.map((c) => (
+              <li key={c}>{c}</li>
+            ))}
+          </ul>
+        )}
+      </div>
+    );
+  }
+
   if (m.kind === "result" && m.run) {
     const r = m.run;
     return (
@@ -170,13 +239,13 @@ export function MessageView({
     const e = m.explanation;
     return (
       <div className="bubble assistant" data-testid="explanation">
-        <div className="bubble-label">{e.grounded === "ai" ? "AI explanation · every figure checked against the optimizer's results" : "Optimizer facts (deterministic explanation)"}</div>
+        <div className="bubble-label">{e.grounded === "ai" ? "AI explanation · every figure checked against the facts" : m.source === "itinerary planner facts" ? "Itinerary planner facts (deterministic explanation)" : "Optimizer facts (deterministic explanation)"}</div>
         {e.rejectedReason && <div className="small save-neg">{e.rejectedReason}</div>}
         <div className="pre">
           <Cited text={m.text} facts={e.facts} />
         </div>
         <button type="button" className="link small" onClick={() => setShowFacts(!showFacts)}>
-          {showFacts ? "Hide" : "Show"} the {e.facts.length} optimizer facts behind this
+          {showFacts ? "Hide" : "Show"} the {e.facts.length} facts behind this
         </button>
         {showFacts && (
           <ol className="facts small">

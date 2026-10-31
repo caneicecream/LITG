@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type { Conversation } from "@/ai/types";
 import { applyRecheck, type RecheckInput } from "../observations";
-import { MAX_RUNS_PER_TRIP, migrateEntry, type RunSnapshot, type SavedTrip, type StoreBackend, type StoreFile, type UserPriceEntry } from "../store";
+import { MAX_RUNS_PER_TRIP, migrateEntry, summarizeItinerary, type RunSnapshot, type SavedItinerary, type SavedTrip, type StoreBackend, type StoreFile, type UserPriceEntry } from "../store";
 import type { TripRequest } from "@/domain/types";
 
 /** The original single-file JSON store (default when DATABASE_URL is not set). */
@@ -17,9 +17,9 @@ export async function readStoreFile(file = jsonStorePath()): Promise<StoreFile> 
   try {
     const raw = await fs.readFile(/*turbopackIgnore: true*/ file, "utf8");
     const parsed = JSON.parse(raw) as StoreFile;
-    return { version: 1, prices: (parsed.prices ?? []).map(migrateEntry), trips: parsed.trips ?? [], conversations: parsed.conversations ?? [] };
+    return { version: 1, prices: (parsed.prices ?? []).map(migrateEntry), trips: parsed.trips ?? [], conversations: parsed.conversations ?? [], itineraries: parsed.itineraries ?? [] };
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, prices: [], trips: [], conversations: [] };
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, prices: [], trips: [], conversations: [], itineraries: [] };
     throw err;
   }
 }
@@ -106,4 +106,24 @@ export const jsonBackend: StoreBackend = {
       return conv;
     }),
   deleteConversation: (id) => mutate((d) => removeById(d.conversations, id)),
+  listItineraries: async () =>
+    ((await readStoreFile()).itineraries ?? []).map(summarizeItinerary).sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1)),
+  getItinerary: async (id) => ((await readStoreFile()).itineraries ?? []).find((x) => x.id === id),
+  saveItinerary: (input) =>
+    mutate((d) => {
+      const now = new Date().toISOString();
+      d.itineraries ??= [];
+      let it: SavedItinerary | undefined = input.id ? d.itineraries.find((x) => x.id === input.id) : undefined;
+      if (input.id && !it) return undefined;
+      if (!it) {
+        it = { id: `itin-${randomUUID()}`, name: input.name, tripId: input.tripId, createdAt: now, updatedAt: now, versions: [] };
+        d.itineraries.push(it);
+      }
+      it.name = input.name;
+      it.updatedAt = now;
+      // Append only: earlier versions are never modified.
+      it.versions.push({ version: it.versions.length + 1, createdAt: now, note: input.note, engineVersion: input.result.engineVersion, input: input.input, result: input.result });
+      return it;
+    }),
+  deleteItinerary: (id) => mutate((d) => removeById((d.itineraries ??= []), id)),
 };

@@ -21,12 +21,12 @@ describeDb("migrations", () => {
   it("apply in order, are recorded, and re-running is a no-op", async () => {
     expect((await migrationStatus(db)).pending).toEqual(MIGRATIONS.map((m) => m.version));
     await expect(assertSchemaCurrent(db)).rejects.toBeInstanceOf(SchemaOutOfDateError);
-    expect(await runMigrations(db)).toEqual(["001", "002"]);
+    expect(await runMigrations(db)).toEqual(["001", "002", "003"]);
     expect(await runMigrations(db)).toEqual([]);
     await expect(assertSchemaCurrent(db)).resolves.toBeUndefined();
     const tables = await db.query<{ t: string }>("SELECT table_name AS t FROM information_schema.tables WHERE table_schema = 't_migrations' ORDER BY 1");
     expect(tables.map((r) => r.t)).toEqual(
-      expect.arrayContaining(["price_entries", "price_observations", "trips", "trip_runs", "conversations", "monitors", "monitor_checks", "notifications", "app_settings", "schema_migrations"]),
+      expect.arrayContaining(["price_entries", "price_observations", "trips", "trip_runs", "conversations", "monitors", "monitor_checks", "notifications", "app_settings", "schema_migrations", "itineraries", "itinerary_versions"]),
     );
   });
 

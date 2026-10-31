@@ -12,6 +12,7 @@ import type {
 import type { Cents } from "@/domain/money";
 import type { Conversation } from "@/ai/types";
 import type { RecheckInput } from "./observations";
+import type { Itinerary, ItineraryInput } from "@/itinerary/types";
 
 /**
  * Persistence facade for personal data: price entries (with observation
@@ -54,12 +55,63 @@ export interface SavedTrip {
   runs: RunSnapshot[];
 }
 
+/**
+ * One generated plan, kept exactly as produced: the validated inputs
+ * (preferences, trip context, park information with provenance), the output
+ * with its score breakdown, and the engine version. Versions are append-only:
+ * regenerating adds a version and never rewrites an earlier one.
+ */
+export interface ItineraryVersion {
+  version: number;
+  createdAt: string;
+  note: string;
+  engineVersion: string;
+  input: ItineraryInput;
+  result: Itinerary;
+}
+
+export interface SavedItinerary {
+  id: string;
+  name: string;
+  tripId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  versions: ItineraryVersion[];
+}
+
+export interface ItinerarySummary {
+  id: string;
+  name: string;
+  tripId: string | null;
+  createdAt: string;
+  updatedAt: string;
+  versionCount: number;
+  latest: { version: number; headline: string; status: Itinerary["status"]; demo: boolean; engineVersion: string } | null;
+}
+
 export interface StoreFile {
   version: 1;
   prices: UserPriceEntry[];
   trips: SavedTrip[];
   conversations: Conversation[];
+  /** Added in Milestone 5; older files have none. */
+  itineraries?: SavedItinerary[];
 }
+
+export function summarizeItinerary(it: SavedItinerary): ItinerarySummary {
+  const v = it.versions[it.versions.length - 1];
+  return {
+    id: it.id,
+    name: it.name,
+    tripId: it.tripId,
+    createdAt: it.createdAt,
+    updatedAt: it.updatedAt,
+    versionCount: it.versions.length,
+    latest: v ? { version: v.version, headline: v.result.headline, status: v.result.status, demo: v.result.demo, engineVersion: v.engineVersion } : null,
+  };
+}
+
+export type SaveItineraryInput = { id?: string; name: string; tripId: string | null; note: string; input: ItineraryInput; result: Itinerary };
 
 export const MAX_RUNS_PER_TRIP = 50;
 
@@ -97,6 +149,11 @@ export interface StoreBackend {
   getConversation(id: string): Promise<Conversation | undefined>;
   saveConversation(conv: Conversation): Promise<Conversation>;
   deleteConversation(id: string): Promise<boolean>;
+  listItineraries(): Promise<ItinerarySummary[]>;
+  getItinerary(id: string): Promise<SavedItinerary | undefined>;
+  /** Create an itinerary, or append a new version to an existing one (never rewrites earlier versions). */
+  saveItinerary(input: SaveItineraryInput): Promise<SavedItinerary | undefined>;
+  deleteItinerary(id: string): Promise<boolean>;
 }
 
 let override: StoreBackend | null = null;
@@ -133,3 +190,7 @@ export const listConversations = async () => (await backend()).listConversations
 export const getConversation = async (id: string) => (await backend()).getConversation(id);
 export const saveConversation = async (conv: Conversation) => (await backend()).saveConversation(conv);
 export const deleteConversation = async (id: string) => (await backend()).deleteConversation(id);
+export const listItineraries = async () => (await backend()).listItineraries();
+export const getItinerary = async (id: string) => (await backend()).getItinerary(id);
+export const saveItinerary = async (input: SaveItineraryInput) => (await backend()).saveItinerary(input);
+export const deleteItinerary = async (id: string) => (await backend()).deleteItinerary(id);

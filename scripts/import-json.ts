@@ -18,7 +18,7 @@ async function main() {
   const fileArg = args.indexOf("--file");
   const file = fileArg >= 0 ? args[fileArg + 1]! : jsonStorePath();
   const data = await readStoreFile(file);
-  console.log(`Reading ${file}: ${data.prices.length} price entries, ${data.trips.length} trips, ${data.conversations.length} conversations.`);
+  console.log(`Reading ${file}: ${data.prices.length} price entries, ${data.trips.length} trips, ${data.conversations.length} conversations, ${(data.itineraries ?? []).length} itineraries.`);
   const db = createDb(url, { max: 1 });
   try {
     await assertSchemaCurrent(db);
@@ -28,6 +28,7 @@ async function main() {
     console.log(`  Observations:   ${r.observations.imported} imported${r.observations.identicalRepeatsMerged ? `, ${r.observations.identicalRepeatsMerged} identical repeats merged` : ""}`);
     console.log(`  Trips:          ${r.trips.imported} imported, ${r.trips.alreadyPresent} already present, ${r.trips.runsImported} run snapshots added`);
     console.log(`  Conversations:  ${r.conversations.imported} imported, ${r.conversations.alreadyPresent} already present`);
+    console.log(`  Itineraries:    ${r.itineraries.imported} imported, ${r.itineraries.alreadyPresent} already present, ${r.itineraries.versionsImported} versions added`);
     for (const w of r.warnings) console.log(`  Warning: ${w}`);
     console.log(`\nThe JSON file was not modified. Keep it as a backup; the app now uses PostgreSQL while DATABASE_URL is set.`);
   } finally {

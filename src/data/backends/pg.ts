@@ -7,7 +7,8 @@ import { ensureSchema } from "@/db/migrate";
 import { historyFromObservations, insertObservation, observationsForEntries, type Query } from "@/db/observations";
 import { contentHashOf, observationFromEntry } from "@/monitoring/observations";
 import { applyRecheck, type RecheckInput } from "../observations";
-import { MAX_RUNS_PER_TRIP, migrateEntry, type RecheckResult, type RunSnapshot, type SavedTrip, type StoreBackend, type UserPriceEntry } from "../store";
+import { MAX_RUNS_PER_TRIP, migrateEntry, type ItinerarySummary, type ItineraryVersion, type RecheckResult, type RunSnapshot, type SavedItinerary, type SavedTrip, type StoreBackend, type UserPriceEntry } from "../store";
+import type { Itinerary } from "@/itinerary/types";
 
 /**
  * PostgreSQL store. Entries hold their current state; every version of an entry
@@ -155,5 +156,67 @@ export function pgBackendFor(db: Db, opts: { now?: () => Date } = {}): StoreBack
         return conv;
       }),
     deleteConversation: (id) => run(async () => (await db.query("DELETE FROM conversations WHERE id = $1 RETURNING id", [id])).length > 0),
+    listItineraries: () =>
+      run(async () => {
+        const rows = await db.query<{ id: string; name: string; trip_id: string | null; created_at: string; updated_at: string; n: number; version: number | null; result: Itinerary | null; engine_version: string | null }>(
+          `SELECT i.id, i.name, i.trip_id, i.created_at, i.updated_at,
+                  (SELECT count(*)::int FROM itinerary_versions v WHERE v.itinerary_id = i.id) AS n,
+                  l.version, l.result, l.engine_version
+             FROM itineraries i
+             LEFT JOIN LATERAL (SELECT version, result, engine_version FROM itinerary_versions v WHERE v.itinerary_id = i.id ORDER BY version DESC LIMIT 1) l ON true
+            ORDER BY i.updated_at DESC`,
+        );
+        return rows.map(
+          (r): ItinerarySummary => ({
+            id: r.id,
+            name: r.name,
+            tripId: r.trip_id,
+            createdAt: r.created_at,
+            updatedAt: r.updated_at,
+            versionCount: r.n,
+            latest: r.result ? { version: r.version!, headline: r.result.headline, status: r.result.status, demo: r.result.demo, engineVersion: r.engine_version! } : null,
+          }),
+        );
+      }),
+    getItinerary: (id) => run(() => loadItinerary(db.query, id)),
+    saveItinerary: (input) =>
+      run(() =>
+        db.tx(async (q) => {
+          const now = clock().toISOString();
+          let id = input.id;
+          if (id) {
+            const exists = await q("SELECT 1 FROM itineraries WHERE id = $1 FOR UPDATE", [id]);
+            if (!exists.length) return undefined;
+            await q("UPDATE itineraries SET name = $2, updated_at = $3 WHERE id = $1", [id, input.name, now]);
+          } else {
+            id = `itin-${randomUUID()}`;
+            const trip = input.tripId ? await q("SELECT 1 FROM trips WHERE id = $1", [input.tripId]) : [];
+            await q("INSERT INTO itineraries (id, name, trip_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)", [id, input.name, trip.length ? input.tripId : null, now]);
+          }
+          const next = (await q<{ next: number }>("SELECT coalesce(max(version), 0) + 1 AS next FROM itinerary_versions WHERE itinerary_id = $1", [id]))[0]!.next;
+          await q("INSERT INTO itinerary_versions (itinerary_id, version, created_at, note, engine_version, input, result) VALUES ($1, $2, $3, $4, $5, $6, $7)", [
+            id, next, now, input.note, input.result.engineVersion, JSON.stringify(input.input), JSON.stringify(input.result),
+          ]);
+          return loadItinerary(q, id);
+        }),
+      ),
+    deleteItinerary: (id) => run(async () => (await db.query("DELETE FROM itineraries WHERE id = $1 RETURNING id", [id])).length > 0),
+  };
+}
+
+async function loadItinerary(q: Query | Db["query"], id: string): Promise<SavedItinerary | undefined> {
+  const [it] = await q<{ id: string; name: string; trip_id: string | null; created_at: string; updated_at: string }>("SELECT * FROM itineraries WHERE id = $1", [id]);
+  if (!it) return undefined;
+  const versions = await q<{ version: number; created_at: string; note: string; engine_version: string; input: ItineraryVersion["input"]; result: Itinerary }>(
+    "SELECT version, created_at, note, engine_version, input, result FROM itinerary_versions WHERE itinerary_id = $1 ORDER BY version",
+    [id],
+  );
+  return {
+    id: it.id,
+    name: it.name,
+    tripId: it.trip_id,
+    createdAt: it.created_at,
+    updatedAt: it.updated_at,
+    versions: versions.map((v) => ({ version: v.version, createdAt: v.created_at, note: v.note, engineVersion: v.engine_version, input: v.input, result: v.result })),
   };
 }

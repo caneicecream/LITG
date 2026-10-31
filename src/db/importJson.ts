@@ -21,6 +21,7 @@ export interface ImportReport {
   observations: { imported: number; identicalRepeatsMerged: number };
   trips: { imported: number; alreadyPresent: number; runsImported: number };
   conversations: { imported: number; alreadyPresent: number; differing: string[] };
+  itineraries: { imported: number; alreadyPresent: number; versionsImported: number };
   warnings: string[];
 }
 
@@ -50,6 +51,12 @@ export function structuralErrors(file: StoreFile): string[] {
   });
   file.conversations.forEach((c, i) => {
     if (typeof c?.id !== "string" || !Array.isArray(c.messages)) errors.push(`conversations[${i}]: needs id and messages`);
+  });
+  (file.itineraries ?? []).forEach((x, i) => {
+    if (typeof x?.id !== "string" || typeof x.name !== "string" || !Array.isArray(x.versions)) errors.push(`itineraries[${i}]: needs id, name and versions`);
+    else x.versions.forEach((v, j) => {
+      if (!Number.isInteger(v?.version) || !v.input || !v.result) errors.push(`itineraries[${i}].versions[${j}]: needs version, input and result`);
+    });
   });
   return errors;
 }
@@ -90,6 +97,7 @@ export async function importJsonStore(db: Db, file: StoreFile, opts: { dryRun?: 
     observations: { imported: 0, identicalRepeatsMerged: 0 },
     trips: { imported: 0, alreadyPresent: 0, runsImported: 0 },
     conversations: { imported: 0, alreadyPresent: 0, differing: [] },
+    itineraries: { imported: 0, alreadyPresent: 0, versionsImported: 0 },
     warnings: [],
   };
   for (const e of file.prices) {
@@ -140,6 +148,24 @@ export async function importJsonStore(db: Db, file: StoreFile, opts: { dryRun?: 
         }
         await q("INSERT INTO conversations (id, title, data, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)", [c.id, c.title, JSON.stringify(c), c.createdAt, c.updatedAt]);
         report.conversations.imported++;
+      }
+      for (const it of file.itineraries ?? []) {
+        const existing = await q("SELECT 1 FROM itineraries WHERE id = $1", [it.id]);
+        if (existing.length) report.itineraries.alreadyPresent++;
+        else {
+          const trip = it.tripId ? await q("SELECT 1 FROM trips WHERE id = $1", [it.tripId]) : [];
+          await q("INSERT INTO itineraries (id, name, trip_id, created_at, updated_at) VALUES ($1, $2, $3, $4, $5)", [it.id, it.name, trip.length ? it.tripId : null, it.createdAt, it.updatedAt]);
+          report.itineraries.imported++;
+        }
+        // Versions are identified by number; existing ones are never overwritten.
+        for (const v of it.versions) {
+          const ins = await q(
+            `INSERT INTO itinerary_versions (itinerary_id, version, created_at, note, engine_version, input, result) VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (itinerary_id, version) DO NOTHING RETURNING version`,
+            [it.id, v.version, v.createdAt, v.note, v.engineVersion, JSON.stringify(v.input), JSON.stringify(v.result)],
+          );
+          report.itineraries.versionsImported += ins.length;
+        }
       }
       if (opts.dryRun) throw new DryRunRollback();
     });

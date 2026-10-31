@@ -13,11 +13,11 @@ async function handleGET(req: Request) {
   return Response.json({ conversations: await listConversations() });
 }
 
-/** POST: start a conversation, optionally from the planner's request ({ request, title }). */
+/** POST: start a conversation, optionally from the planner's request ({ request, title }) or an itinerary ({ itinerary: { input, savedId, tripId } }). */
 async function handlePOST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { request?: unknown; title?: string };
+  const body = (await req.json().catch(() => ({}))) as { request?: unknown; title?: string; itinerary?: { input: unknown; savedId?: string | null; tripId?: string | null } };
   try {
-    const conversation = await createConversation(assistantDeps(), { request: body.request as never, title: body.title });
+    const conversation = await createConversation(assistantDeps(), { request: body.request as never, title: body.title, itinerary: body.itinerary });
     return Response.json({ conversation }, { status: 201 });
   } catch (err) {
     return Response.json({ errors: [err instanceof Error ? err.message : "Invalid request"] }, { status: 400 });

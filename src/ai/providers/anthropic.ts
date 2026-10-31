@@ -3,7 +3,9 @@ import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import type { z } from "zod";
 import { EXPLAIN_SYSTEM_PROMPT, explainUserPrompt, interpretSystemPrompt, interpretUserPrompt } from "../prompts";
 import { explanationSchema, proposalSchema } from "../types";
-import { AiError, type AiProvider, type ExplainInput, type InterpretInput } from "./provider";
+import { AiError, type AiProvider, type ExplainInput, type InterpretInput, type ItineraryInterpretInput } from "./provider";
+import { itineraryProposalSchema } from "../itinerary/patch";
+import { itinerarySystemPrompt, itineraryUserPrompt } from "../itinerary/prompts";
 
 /**
  * Claude via the official Anthropic SDK (server-side only; the key never
@@ -44,6 +46,10 @@ export class AnthropicProvider implements AiProvider {
 
   interpret(input: InterpretInput): Promise<unknown> {
     return this.call(interpretSystemPrompt(input.catalog), interpretUserPrompt(input), proposalSchema, this.opts.interpretEffort);
+  }
+
+  interpretItinerary(input: ItineraryInterpretInput): Promise<unknown> {
+    return this.call(itinerarySystemPrompt(), itineraryUserPrompt(input), itineraryProposalSchema, this.opts.interpretEffort);
   }
 
   explain(input: ExplainInput): Promise<unknown> {

@@ -10,6 +10,8 @@ import { configKey, fingerprint } from "@/monitoring/fingerprint";
 import type { ObservationRecord } from "@/monitoring/observations";
 import { buildDigest, summarizeRun } from "./digest";
 import { historyFacts } from "./history";
+import { applyItineraryProposal, routesToItinerary, sendItineraryMessage } from "./itinerary/service";
+import { itineraryInputSchema, type ItineraryInput } from "@/itinerary/types";
 import { checkGrounding, groundExplanation } from "./grounding";
 import { applyPatch, defaultQuestions, diffRequests, moneyMentions } from "./patch";
 import { AiError, type AiProvider } from "./providers/provider";
@@ -67,9 +69,14 @@ async function load(deps: AssistantDeps, id: string): Promise<Conversation> {
 }
 
 /** Start a conversation, optionally from the planner's current request (whose choices count as stated). */
-export async function createConversation(deps: AssistantDeps, opts: { request?: TripRequest; title?: string } = {}): Promise<Conversation> {
+export async function createConversation(
+  deps: AssistantDeps,
+  opts: { request?: TripRequest; title?: string; itinerary?: { input: unknown; savedId?: string | null; tripId?: string | null } } = {},
+): Promise<Conversation> {
   const fromPlanner = opts.request ? parseTripRequest(opts.request) : null;
   if (fromPlanner && !fromPlanner.ok) throw new Error(`Invalid request: ${fromPlanner.errors.join("; ")}`);
+  const itin = opts.itinerary ? itineraryInputSchema.safeParse(opts.itinerary.input) : null;
+  if (itin && !itin.success) throw new Error(`Invalid itinerary: ${itin.error.issues.slice(0, 3).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
   const at = nowIso(deps);
   const conv: Conversation = {
     id: randomUUID(),
@@ -82,6 +89,9 @@ export async function createConversation(deps: AssistantDeps, opts: { request?: 
     messages: [],
     lastResult: null,
     lastVariants: [],
+    ...(itin?.success
+      ? { itinerary: { input: itin.data as ItineraryInput, savedId: opts.itinerary!.savedId ?? null, tripId: opts.itinerary!.tripId ?? null, lastResult: null, lastComparison: null } }
+      : {}),
   };
   return deps.repo.save(conv);
 }
@@ -132,6 +142,8 @@ export async function sendMessage(deps: AssistantDeps, conversationId: string, t
   if (!trimmed) return conv;
   conv.messages.push(message(deps, { role: "user", kind: "user", text: trimmed }));
   if (conv.title === "New plan") conv.title = trimmed.length > 60 ? `${trimmed.slice(0, 57)}…` : trimmed;
+
+  if (routesToItinerary(conv, trimmed)) return sendItineraryMessage(deps, conv, trimmed, (c) => save(deps, c));
 
   let interpreted: Awaited<ReturnType<typeof interpret>>;
   try {
@@ -206,6 +218,7 @@ export async function sendMessage(deps: AssistantDeps, conversationId: string, t
 export async function applyProposal(deps: AssistantDeps, conversationId: string, messageId: string): Promise<Conversation> {
   const conv = await load(deps, conversationId);
   const msg = conv.messages.find((m) => m.id === messageId);
+  if (msg?.itineraryProposal) return applyItineraryProposal(deps, conv, messageId, (c) => save(deps, c));
   const record = msg?.proposal;
   if (!msg || !record) throw new Error("Proposal not found");
   if (record.status !== "pending" || !record.preview) throw new Error(`This proposal can't be applied (${record.status}).`);
@@ -223,7 +236,8 @@ export async function applyProposal(deps: AssistantDeps, conversationId: string,
 
 export async function dismissProposal(deps: AssistantDeps, conversationId: string, messageId: string): Promise<Conversation> {
   const conv = await load(deps, conversationId);
-  const record = conv.messages.find((m) => m.id === messageId)?.proposal;
+  const m = conv.messages.find((x) => x.id === messageId);
+  const record = m?.proposal ?? m?.itineraryProposal;
   if (record && record.status === "pending") record.status = "dismissed";
   return save(deps, conv);
 }

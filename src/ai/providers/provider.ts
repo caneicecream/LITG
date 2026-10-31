@@ -1,5 +1,6 @@
 import type { Catalog, TripRequest } from "@/domain/types";
 import type { ConversationMessage, Fact, RequestSection, RunSummary } from "../types";
+import type { ItineraryInput } from "@/itinerary/types";
 
 /**
  * A small, vendor-neutral interface. Providers return *raw* output; the
@@ -12,6 +13,13 @@ export interface InterpretInput {
   catalog: Catalog;
   history: ConversationMessage[];
   lastRun: RunSummary | null;
+  message: string;
+}
+
+export interface ItineraryInterpretInput {
+  today: string;
+  input: ItineraryInput;
+  history: ConversationMessage[];
   message: string;
 }
 
@@ -28,6 +36,8 @@ export interface AiProvider {
   readonly kind: "llm" | "rules" | "mock";
   /** Interpret a message into a proposal (raw; validated by the caller). */
   interpret(input: InterpretInput): Promise<unknown>;
+  /** Interpret an itinerary request into an itinerary proposal (raw; validated by the caller). Optional: basic mode handles it otherwise. */
+  interpretItinerary?(input: ItineraryInterpretInput): Promise<unknown>;
   /** Explain optimizer facts (raw; grounding-checked by the caller). Null = use the deterministic explanation. */
   explain(input: ExplainInput): Promise<unknown | null>;
 }

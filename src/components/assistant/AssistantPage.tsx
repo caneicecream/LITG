@@ -11,6 +11,7 @@ import type { Evaluation, OptimizationResult, TripRequest } from "@/domain/types
 import { Results } from "../Results";
 import { TripForm } from "../TripForm";
 import { MessageView } from "./Messages";
+import { CompareView, ItineraryView } from "../itinerary/ItineraryView";
 
 const SUGGESTIONS = [
   "What if we stayed one more night?",
@@ -18,6 +19,14 @@ const SUGGESTIONS = [
   "Show me what happens if I remove Park Hopper Plus.",
   "Compare a Deluxe resort against a Value resort.",
   "Why did the cheapest option win?",
+];
+
+const ITINERARY_SUGGESTIONS = [
+  "Build a relaxed plan.",
+  "Minimize walking and avoid crossing the park repeatedly.",
+  "Keep our afternoons flexible.",
+  "Compare a ride-focused plan with a relaxed plan.",
+  "What would we lose if we removed a park day?",
 ];
 
 const EXAMPLE =
@@ -148,6 +157,18 @@ export function AssistantPage() {
     router.push("/");
   };
 
+  const openItinerary = () => {
+    const it = conv?.itinerary;
+    if (!it) return;
+    try {
+      localStorage.setItem("dvo:itinerary-draft", JSON.stringify({ input: it.input, tripId: it.tripId, savedId: it.savedId }));
+    } catch {
+      /* ignore */
+    }
+    // A saved itinerary opens with the assistant's changes on top, to save as a new version.
+    router.push(it.savedId ? `/itinerary/${it.savedId}?draft=1` : "/itinerary");
+  };
+
   const isCurrent = (m: ConversationMessage) => JSON.stringify(m.run?.request) === JSON.stringify(conv?.request);
   const entries = conv ? describeRequest(conv.request, CATALOG) : [];
   const unconfirmed = conv ? unconfirmedSections(conv.confirmed) : [];
@@ -238,9 +259,9 @@ export function AssistantPage() {
             send(text);
           }}
         >
-          {conv?.lastResult && (
+          {(conv?.lastResult || conv?.itinerary) && (
             <div className="suggestions">
-              {SUGGESTIONS.map((s) => (
+              {(conv.itinerary ? ITINERARY_SUGGESTIONS : SUGGESTIONS).map((s) => (
                 <button key={s} type="button" className="suggest" disabled={!!busy} onClick={() => send(s)}>
                   {s}
                 </button>
@@ -354,9 +375,28 @@ export function AssistantPage() {
           </div>
         )}
 
+        {conv?.itinerary && (
+          <div className="card card-pad stack" data-testid="itinerary-panel">
+            <div className="row">
+              <h2>Itinerary</h2>
+              <span className="small muted">Planned by deterministic rules; the assistant only proposes preference changes.</span>
+              <span className="spacer" />
+              <button type="button" onClick={openItinerary}>
+                Open in itinerary planner
+              </button>
+            </div>
+            {conv.itinerary.lastComparison ? (
+              <CompareView variants={conv.itinerary.lastComparison} summary={[]} />
+            ) : conv.itinerary.lastResult ? (
+              <ItineraryView it={conv.itinerary.lastResult} compact />
+            ) : (
+              <p className="small muted">No itinerary yet. Ask for one (“Build a relaxed plan”) or apply a proposed change.</p>
+            )}
+          </div>
+        )}
         {conv?.lastResult ? (
           <Results result={conv.lastResult} loadDetail={loadDetail} />
-        ) : conv ? (
+        ) : conv && !conv.itinerary ? (
           <div className="card empty">No results yet. Apply a proposed change (or edit the plan) to run the optimizer.</div>
         ) : null}
       </section>
