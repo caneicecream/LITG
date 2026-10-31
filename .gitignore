@@ -8,3 +8,6 @@ next-env.d.ts
 # Local user data (manual quotes, saved trips) — personal, never committed
 data/local-store.json
 .DS_Store
+
+# Local screenshot previews (generated for testing; not source)
+preview/
