@@ -196,7 +196,7 @@ export function Planner() {
                 Inputs changed. These results are from the previous run. Press “Find best options” to recalculate.
               </div>
             )}
-            <Results result={result} loadDetail={loadDetail} />
+            <Results result={result} loadDetail={loadDetail} request={lastRun.current ?? undefined} />
           </div>
         ) : (
           <div className="card empty">{running ? "Optimizing…" : "Set up your trip and press “Find best options”."}</div>

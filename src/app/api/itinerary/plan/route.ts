@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { todayIso } from "@/domain/dates";
-import { compareSummary, compareVariants, planItinerary, STANDARD_VARIANTS } from "@/itinerary/engine";
+import { compareItineraries, compareSummary, compareVariants, planItinerary, STANDARD_VARIANTS } from "@/itinerary/engine";
 import { itineraryInputSchema } from "@/itinerary/types";
 
 /**
@@ -16,5 +16,12 @@ export async function POST(req: Request) {
   const itinerary = planItinerary(parsed.data.input, opts);
   if (!parsed.data.compare) return Response.json({ itinerary });
   const [a, b] = compareVariants(parsed.data.input, STANDARD_VARIANTS, opts);
-  return Response.json({ itinerary, comparison: { variants: [a, b], summary: compareSummary(a!.itinerary, b!.itinerary) } });
+  return Response.json({
+    itinerary,
+    comparison: {
+      variants: [a, b].map((v) => ({ label: v!.label, differs: v!.differs, itinerary: v!.itinerary })),
+      summary: compareSummary(a!.itinerary, b!.itinerary),
+      details: compareItineraries(a!, b!),
+    },
+  });
 }

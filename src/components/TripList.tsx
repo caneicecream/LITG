@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { CATALOG } from "@/data/catalog";
-import type { SavedTrip } from "@/data/store";
+import type { ItinerarySummary, SavedTrip } from "@/data/store";
 import { formatShortDate } from "@/domain/dates";
 import { formatCents } from "@/domain/money";
 import type { PriceStatus } from "@/domain/provenance";
@@ -14,6 +14,7 @@ export function TripList() {
   const [error, setError] = useState<string | null>(null);
   // Monitoring (needs PostgreSQL): trip id → monitor id.
   const [monitoring, setMonitoring] = useState<{ available: boolean; byTrip: Record<string, string> }>({ available: false, byTrip: {} });
+  const [itineraries, setItineraries] = useState<ItinerarySummary[]>([]);
 
   const load = () => {
     fetch("/api/trips")
@@ -23,6 +24,10 @@ export function TripList() {
         setTrips(b.trips);
       })
       .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    fetch("/api/itineraries")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => b && setItineraries(b.itineraries ?? []))
+      .catch(() => undefined);
     fetch("/api/monitoring")
       .then((r) => (r.ok ? r.json() : null))
       .then((b) => b && setMonitoring({ available: b.available, byTrip: Object.fromEntries((b.monitors ?? []).map((m: { tripId: string; id: string }) => [m.tripId, m.id])) }))
@@ -75,6 +80,9 @@ export function TripList() {
               <Link className="btn" href={`/?trip=${t.id}`}>
                 Open
               </Link>
+              <Link className="btn" href={`/itinerary?trip=${t.id}`}>
+                Plan the park days
+              </Link>
               {monitoring.byTrip[t.id] ? (
                 <Link className="btn" href={`/monitoring/${monitoring.byTrip[t.id]}`}>
                   Monitoring ✓
@@ -94,6 +102,19 @@ export function TripList() {
               {formatShortDate(r.dates.latestDeparture)} · {r.dates.minNights}–{r.dates.maxNights} nights · {r.tickets.parkDays} park days
               {pref ? ` · prefers ${pref.name.replace("Disney's ", "")}` : ""} · updated {new Date(t.updatedAt).toLocaleString()}
             </p>
+            {itineraries.some((x) => x.tripId === t.id) && (
+              <p className="small">
+                Itineraries:{" "}
+                {itineraries
+                  .filter((x) => x.tripId === t.id)
+                  .map((x, i) => (
+                    <span key={x.id}>
+                      {i > 0 && " · "}
+                      <Link href={`/itinerary/${x.id}`}>{x.name}</Link> <span className="muted">({x.versionCount} version{x.versionCount === 1 ? "" : "s"})</span>
+                    </span>
+                  ))}
+              </p>
+            )}
             {t.runs.length > 0 && (
               <div className="scroll-x">
               <table className="cmp">

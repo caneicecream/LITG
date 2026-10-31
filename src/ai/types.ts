@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Cents } from "@/domain/money";
 import type { OptimizationResult, TripRequest } from "@/domain/types";
 import type { Itinerary, ItineraryInput } from "@/itinerary/types";
+import type { ItineraryComparison } from "@/itinerary/engine";
 
 /**
  * The AI layer's contract. The model never returns prices, totals or
@@ -217,6 +218,8 @@ export interface ItineraryState {
   tripId: string | null;
   lastResult: Itinerary | null;
   lastComparison: { label: string; differs: string[]; itinerary: Itinerary }[] | null;
+  /** Side-by-side comparison of the two variants (same facts, different preferences). */
+  lastComparisonDetails?: ItineraryComparison | null;
 }
 
 export interface ConversationMessage {

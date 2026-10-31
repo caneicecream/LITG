@@ -12,10 +12,11 @@ import { InfoChip } from "./ItineraryView";
  * its source and an "entered" date, and is never labelled as verified.
  */
 
-type Section = "hours" | "dining" | "lightningLane" | "parkReservations" | "closures" | "waits" | "crowds";
+type Section = "hours" | "attractionHours" | "dining" | "lightningLane" | "parkReservations" | "closures" | "waits" | "crowds";
 
 const SECTIONS: { key: Section; label: string; help: string }[] = [
   { key: "hours", label: "Park hours", help: "From the official park calendar for your dates. Without these, your own planning window is used and the plan is provisional." },
+  { key: "attractionHours", label: "Show and attraction times", help: "A show's performance time, an evening spectacular or parade time, or an attraction's own hours. Evening shows and parades are only planned once you enter their time." },
   { key: "dining", label: "Dining reservations", help: "Reservations you hold. The plan builds around them." },
   { key: "lightningLane", label: "Lightning Lane return windows", help: "Only windows you actually hold. Availability is never assumed or checked." },
   { key: "parkReservations", label: "Park reservations", help: "Theme park reservations you hold, if your ticket requires them." },
@@ -24,8 +25,12 @@ const SECTIONS: { key: Section; label: string; help: string }[] = [
   { key: "crowds", label: "Crowd estimates", help: "Your own expectation (low / moderate / high). It only scales the planning buffer for rides without a wait estimate." },
 ];
 
-export function KnownInfoEditor({ info, onChange, dates, parks, today }: { info: ParkInfo; onChange: (p: ParkInfo) => void; dates: IsoDate[]; parks: string[]; today: string }) {
-  const [open, setOpen] = useState<Section>("hours");
+export type KnownInfoSection = Section;
+
+export function KnownInfoEditor({ info, onChange, dates, parks, today, section, onSection }: { info: ParkInfo; onChange: (p: ParkInfo) => void; dates: IsoDate[]; parks: string[]; today: string; section?: Section; onSection?: (s: Section) => void }) {
+  const [own, setOwn] = useState<Section>("hours");
+  const open = section ?? own;
+  const setOpen = (s: Section) => (onSection ? onSection(s) : setOwn(s));
   const count = (k: Section) => (info[k] as unknown[]).length;
   const remove = (k: Section, i: number) => onChange({ ...info, [k]: (info[k] as unknown[]).filter((_, j) => j !== i) });
   const add = (k: Section, item: unknown) => onChange({ ...info, [k]: [...(info[k] as unknown[]), item] });
@@ -55,6 +60,8 @@ function describe(k: Section, x: Record<string, unknown>): string {
   switch (k) {
     case "hours":
       return `${d(x.date)} · ${park(x.parkId)} · ${x.open}–${x.close}${x.earlyEntryMin ? ` · early entry ${x.earlyEntryMin} min` : ""}`;
+    case "attractionHours":
+      return `${attr(x.attractionId)} · ${x.date ? d(x.date) : "every day of the trip"} · ${x.start}–${x.end}`;
     case "dining":
       return `${d(x.date)} ${x.time} · ${x.name} · ${park(x.parkId)} · ${x.durationMin} min`;
     case "lightningLane":
@@ -102,6 +109,10 @@ function AddForm({ k, dates, parks, attractions, today, onAdd }: { k: Section; d
       case "hours":
         if (!time(f.open!, f.close!)) return setErr("Closing time must be after opening time.");
         item = { date: f.date, parkId: f.parkId, open: f.open, close: f.close, earlyEntryMin: f.earlyEntryMin ? Number(f.earlyEntryMin) : null, provenance: prov() };
+        break;
+      case "attractionHours":
+        if (!time(f.start!, f.end!)) return setErr("The end time must be after the start time.");
+        item = { attractionId: f.attractionId, date: f.date === "any" ? null : f.date, start: f.start, end: f.end, provenance: prov() };
         break;
       case "dining":
         if (!f.name!.trim()) return setErr("Give the reservation a name.");
@@ -183,6 +194,24 @@ function AddForm({ k, dates, parks, attractions, today, onAdd }: { k: Section; d
               Early entry (min, if you have it)
               <input type="number" min={0} max={120} value={f.earlyEntryMin} onChange={set("earlyEntryMin")} placeholder="none" />
             </label>
+          </>
+        )}
+        {k === "attractionHours" && (
+          <>
+            {attrSel()}
+            <label className="field">
+              Date
+              <select value={f.date} onChange={set("date")}>
+                <option value="any">Every day of the trip</option>
+                {dates.map((d) => (
+                  <option key={d} value={d}>
+                    {formatShortDate(d)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            {timeIn("start", "Starts")}
+            {timeIn("end", "Ends")}
           </>
         )}
         {k === "dining" && (

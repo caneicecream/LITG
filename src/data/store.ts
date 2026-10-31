@@ -87,6 +87,8 @@ export interface ItinerarySummary {
   updatedAt: string;
   versionCount: number;
   latest: { version: number; headline: string; status: Itinerary["status"]; demo: boolean; engineVersion: string } | null;
+  /** The trip the latest version was planned for. */
+  trip: { label: string; arrival: string; departure: string } | null;
 }
 
 export interface StoreFile {
@@ -108,6 +110,7 @@ export function summarizeItinerary(it: SavedItinerary): ItinerarySummary {
     updatedAt: it.updatedAt,
     versionCount: it.versions.length,
     latest: v ? { version: v.version, headline: v.result.headline, status: v.result.status, demo: v.result.demo, engineVersion: v.engineVersion } : null,
+    trip: v ? { label: v.input.context.source.label, arrival: v.input.context.arrival, departure: v.input.context.departure } : null,
   };
 }
 

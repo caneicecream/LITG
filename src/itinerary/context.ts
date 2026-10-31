@@ -2,7 +2,7 @@ import { CATALOG } from "@/data/catalog";
 import { addDays, type IsoDate } from "@/domain/dates";
 import { baselineConfiguration } from "@/domain/optimizer/optimize";
 import { resolveTicketRule } from "@/domain/pricing/resolve";
-import type { PriceData, TicketUsage, TripRequest } from "@/domain/types";
+import type { Configuration, PriceData, TicketUsage, TripRequest } from "@/domain/types";
 import { PARKS } from "./catalog";
 import { defaultPreferences, emptyParkInfo, type InfoProvenance, type ItineraryInput, type ParkInfo, type TripContext } from "./types";
 
@@ -18,7 +18,15 @@ export function tripContextFromRequest(
   data: PriceData | null,
   source: TripContext["source"],
   today: IsoDate,
+  /** A specific optimized option to plan instead of the preferred plan (e.g. "plan the park days for this option"). */
+  option?: Configuration,
 ): { ok: true; context: TripContext } | { ok: false; errors: string[] } {
+  if (option) {
+    request = {
+      ...request,
+      preferred: { arrival: option.arrival, nights: option.nights, resortId: option.resortId, roomTypeId: option.roomTypeId, ticketOption: option.ticketOption ?? undefined, bookingMethod: option.bookingMethod, dining: option.dining },
+    };
+  }
   const base = baselineConfiguration(request);
   if (!("config" in base)) {
     return { ok: false, errors: [`The trip's preferred plan is incomplete (missing ${base.missing.join(", ")}). Set it on Plan & compare, then plan the itinerary.`] };
@@ -123,4 +131,22 @@ export function demoInput(today: IsoDate = "2026-10-30"): ItineraryInput {
   for (const id of ["mk-haunted-mansion", "mk-pirates", "mk-jungle-cruise", "ep-soarin", "ep-test-track", "hs-toy-story-mania", "ak-navi-river"]) prefs.attractions[id] = "want";
   prefs.attractions["mk-tron"] = "avoid";
   return { context, prefs, parkInfo, demo: true };
+}
+
+/**
+ * What differs between the trip an itinerary was planned for and the trip as it
+ * is now. Used to warn before anything is replanned: a different ticket, park
+ * entitlement or date range is never applied silently.
+ */
+export function contextDifferences(saved: TripContext, current: TripContext): string[] {
+  const out: string[] = [];
+  if (saved.arrival !== current.arrival || saved.departure !== current.departure) out.push(`Dates: ${saved.arrival} → ${saved.departure} is now ${current.arrival} → ${current.departure}`);
+  if (saved.resortId !== current.resortId) out.push(`Resort: ${saved.resortName} is now ${current.resortName}`);
+  const p = (c: TripContext) => `${c.party.adults} adults, ${c.party.children} children, ${c.party.infants} infants`;
+  if (p(saved) !== p(current)) out.push(`Party: ${p(saved)} is now ${p(current)}`);
+  const t = (c: TripContext) => (c.ticket ? `${c.ticket.days} park days, ${c.ticket.hopper ? "Park Hopper" : "one park per day"} (${c.ticket.option})` : "no tickets");
+  if (t(saved) !== t(current)) out.push(`Tickets: ${t(saved)} is now ${t(current)}`);
+  if (JSON.stringify(saved.ticket?.usage ?? null) !== JSON.stringify(current.ticket?.usage ?? null)) out.push("Ticket rules (use window, expiration, blocked dates or reservation requirement) have changed");
+  if (saved.parkOnArrivalDay !== current.parkOnArrivalDay || saved.parkOnDepartureDay !== current.parkOnDepartureDay) out.push("Whether you visit parks on arrival or departure day has changed");
+  return out;
 }

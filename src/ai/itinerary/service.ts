@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { todayIso } from "@/domain/dates";
 import { tripContextFromRequest } from "@/itinerary/context";
-import { compareSummary, planItinerary } from "@/itinerary/engine";
+import { compareItineraries, compareSummary, planItinerary, type ItineraryComparison } from "@/itinerary/engine";
 import { defaultPreferences, emptyParkInfo, type Itinerary, type ItineraryInput } from "@/itinerary/types";
 import { checkGrounding } from "../grounding";
 import { AiError } from "../providers/provider";
@@ -127,17 +127,19 @@ async function planAndExplain(
   const state = conv.itinerary!;
   const opts = { today: today(deps) };
   const main = planItinerary(state.input, opts);
-  let variants: { label: string; differs: string[]; itinerary: Itinerary }[] = [];
+  let variants: { label: string; differs: string[]; input: ItineraryInput; itinerary: Itinerary }[] = [];
   if (ctx.comparisons.length === 1) {
     variants = [
-      { label: "Current plan", differs: ["your current preferences"], itinerary: main },
-      { label: ctx.comparisons[0]!.label, differs: ctx.comparisons[0]!.diff, itinerary: planItinerary(ctx.comparisons[0]!.input, opts) },
+      { label: "Current plan", differs: ["your current preferences"], input: state.input, itinerary: main },
+      { label: ctx.comparisons[0]!.label, differs: ctx.comparisons[0]!.diff, input: ctx.comparisons[0]!.input, itinerary: planItinerary(ctx.comparisons[0]!.input, opts) },
     ];
   } else if (ctx.comparisons.length > 1) {
-    variants = ctx.comparisons.slice(0, 2).map((c) => ({ label: c.label, differs: c.diff, itinerary: planItinerary(c.input, opts) }));
+    variants = ctx.comparisons.slice(0, 2).map((c) => ({ label: c.label, differs: c.diff, input: c.input, itinerary: planItinerary(c.input, opts) }));
   }
+  const details = variants.length === 2 ? compareItineraries(variants[0]!, variants[1]!) : null;
   state.lastResult = main;
-  state.lastComparison = variants.length ? variants : null;
+  state.lastComparison = variants.length ? variants.map((v) => ({ label: v.label, differs: v.differs, itinerary: v.itinerary })) : null;
+  state.lastComparisonDetails = details;
   const comparison = variants.length === 2 ? [`${variants[0]!.label} vs ${variants[1]!.label}:`, ...compareSummary(variants[0]!.itinerary, variants[1]!.itinerary)] : [];
   conv.messages.push(
     msg(deps, {
@@ -148,12 +150,19 @@ async function planAndExplain(
       itineraryRun: { headline: main.headline, status: main.status, provisional: main.provisional, score: main.score?.total ?? null, comparison },
     }),
   );
-  await explainInto(deps, conv, main, variants, { question: ctx.question, diff: ctx.diff });
+  await explainInto(deps, conv, main, variants, { question: ctx.question, diff: ctx.diff }, details);
   return conv;
 }
 
-async function explainInto(deps: AssistantDeps, conv: Conversation, it: Itinerary, variants: { label: string; differs: string[]; itinerary: Itinerary }[], ctx: { question: string; diff: string[] }) {
-  const facts = itineraryFacts(it, variants);
+async function explainInto(
+  deps: AssistantDeps,
+  conv: Conversation,
+  it: Itinerary,
+  variants: { label: string; differs: string[]; itinerary: Itinerary }[],
+  ctx: { question: string; diff: string[] },
+  details: ItineraryComparison | null = conv.itinerary?.lastComparisonDetails ?? null,
+) {
+  const facts = itineraryFacts(it, variants, details);
   let note: string | undefined;
   let raw: unknown = null;
   try {

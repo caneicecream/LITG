@@ -301,7 +301,7 @@ export function AssistantPage() {
               </button>
             </div>
             {conv.itinerary.lastComparison ? (
-              <CompareView variants={conv.itinerary.lastComparison} summary={[]} />
+              <CompareView variants={conv.itinerary.lastComparison} summary={[]} details={conv.itinerary.lastComparisonDetails} />
             ) : conv.itinerary.lastResult ? (
               <ItineraryView it={conv.itinerary.lastResult} compact />
             ) : (
@@ -400,7 +400,7 @@ export function AssistantPage() {
         )}
 
         {conv?.lastResult ? (
-          <Results result={conv.lastResult} loadDetail={loadDetail} />
+          <Results result={conv.lastResult} loadDetail={loadDetail} request={conv.request} />
         ) : conv && !conv.itinerary ? (
           <div className="card empty">No results yet. Apply a proposed change (or edit the plan) to run the optimizer.</div>
         ) : null}

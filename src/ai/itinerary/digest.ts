@@ -1,6 +1,6 @@
 import { formatShortDate } from "@/domain/dates";
 import { attractionById, parkById } from "@/itinerary/catalog";
-import { compareSummary, fmtTime } from "@/itinerary/engine";
+import { compareSummary, fmtTime, type ItineraryComparison } from "@/itinerary/engine";
 import type { Itinerary } from "@/itinerary/types";
 import type { Fact } from "../types";
 import { deterministicExplanation } from "../grounding";
@@ -9,7 +9,7 @@ import { deterministicExplanation } from "../grounding";
  * Facts about an itinerary for the assistant to explain. Every time, duration
  * and score the assistant may mention appears here; the planner produced them.
  */
-export function itineraryFacts(it: Itinerary, variants: { label: string; differs: string[]; itinerary: Itinerary }[] = []): Fact[] {
+export function itineraryFacts(it: Itinerary, variants: { label: string; differs: string[]; itinerary: Itinerary }[] = [], details: ItineraryComparison | null = null): Fact[] {
   const out: string[] = [];
   const add = (t: string) => out.push(t);
   add(`Itinerary: ${it.headline}`);
@@ -52,6 +52,11 @@ export function itineraryFacts(it: Itinerary, variants: { label: string; differs
     const onlyA = [...ia].filter((x) => !ib.has(x)).map((x) => attractionById.get(x)?.name);
     const onlyB = [...ib].filter((x) => !ia.has(x)).map((x) => attractionById.get(x)?.name);
     add(`Only in "${a.label}": ${onlyA.join(", ") || "nothing"}. Only in "${b.label}": ${onlyB.join(", ") || "nothing"}.`);
+    if (details) {
+      add(`Comparison details ("${a.label}" vs "${b.label}"): ${details.rows.map((r) => `${r.label}: ${r.a} vs ${r.b}`).join("; ")}.`);
+      if (details.factDifferences.length) add(`Comparison caution: ${details.factDifferences.join(" ")}`);
+      for (const t of details.tradeoffs) add(`Comparison trade-off: ${t}`);
+    }
   }
   return out.map((text, i) => ({ id: `F${i + 1}`, text }));
 }

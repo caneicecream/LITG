@@ -4,7 +4,7 @@ import { Fragment, useMemo, useState } from "react";
 import { addDays, dayOfWeek, formatShortDate, type IsoDate } from "@/domain/dates";
 import { formatCents } from "@/domain/money";
 import { DINING_LABEL, TICKET_LABEL } from "@/domain/pricing/calculate";
-import type { Award, Evaluation, OptimizationResult } from "@/domain/types";
+import type { Award, Evaluation, OptimizationResult, TripRequest } from "@/domain/types";
 import { Breakdown } from "./Breakdown";
 import { StatusChip } from "./ui";
 
@@ -18,7 +18,18 @@ const AWARD_LABEL: Record<Award["kind"], string> = {
 
 type SortKey = "rank" | "total" | "perNight" | "value" | "arrival";
 
-export function Results({ result, loadDetail }: { result: OptimizationResult; loadDetail: (id: string) => Promise<Evaluation | null> }) {
+export function Results({ result, loadDetail, request }: { result: OptimizationResult; loadDetail: (id: string) => Promise<Evaluation | null>; request?: TripRequest }) {
+  // Hand an optimized option to the itinerary planner (the planner shows exactly which trip it plans).
+  const planDays = request
+    ? (e: Evaluation) => {
+        try {
+          localStorage.setItem("dvo:itinerary-option", JSON.stringify({ request, option: e.config }));
+        } catch {
+          /* storage unavailable */
+        }
+        location.href = "/itinerary?option=1";
+      }
+    : undefined;
   const [selected, setSelected] = useState<string | null>(null);
   const [sort, setSort] = useState<SortKey>("rank");
   const [picked, setPicked] = useState<{ id: string; e: Evaluation | null; loading: boolean } | null>(null);
@@ -149,7 +160,7 @@ export function Results({ result, loadDetail }: { result: OptimizationResult; lo
               Close
             </button>
           </div>
-          <Breakdown e={result.baseline} />
+          <Breakdown e={result.baseline} onPlanDays={planDays} />
         </div>
       )}
 
@@ -228,7 +239,7 @@ export function Results({ result, loadDetail }: { result: OptimizationResult; lo
                     {selected === e.id && (
                       <tr className="detail-row">
                         <td colSpan={hasBaselineSavings ? 9 : 8}>
-                          <Breakdown e={e} />
+                          <Breakdown e={e} onPlanDays={planDays} />
                         </td>
                       </tr>
                     )}
@@ -263,7 +274,7 @@ export function Results({ result, loadDetail }: { result: OptimizationResult; lo
                 <div className="award-total" style={{ marginTop: 6 }}>{formatCents(picked.e.totalCents)}</div>
                 <p className="small muted">Not among the top options listed above; shown here for comparison.</p>
               </div>
-              <Breakdown e={picked.e} />
+              <Breakdown e={picked.e} onPlanDays={planDays} />
             </>
           ) : (
             <div className="empty">Could not load this option. Re-run the optimization and try again.</div>

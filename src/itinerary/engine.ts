@@ -1,5 +1,5 @@
 import { addDays, daysBetween, formatShortDate, type IsoDate } from "@/domain/dates";
-import { ATTRACTIONS, areaOf, attractionById, CATALOG_PROVENANCE, parkById, PARKS, type Attraction } from "./catalog";
+import { advisoriesFor, ATTRACTIONS, areaOf, attractionById, CATALOG_PROVENANCE, parkById, PARKS, type Attraction } from "./catalog";
 import type {
   DayPlan,
   DerivedInfoStatus,
@@ -91,6 +91,8 @@ const PACE = {
   packed: { target: 0.85, breakEvery: Infinity, breakMin: 0, mealExtra: 0 },
 } as const;
 const CROWD_FACTOR = { low: 0.6, moderate: 1, high: 1.5 } as const;
+/** Day-ordering penalty per hour a must-do starts after the day's start (a heuristic, documented in ARCHITECTURE.md). */
+const MUST_LATENESS_PER_HOUR = 6;
 
 // ───────────────────────────── Activities ─────────────────────────────
 
@@ -104,6 +106,8 @@ interface Activity {
   priority: "must" | "want" | "optional";
   custom: boolean;
   category: Attraction["category"] | "custom";
+  schedule: Attraction["schedule"] | "custom";
+  minHeightIn?: number;
 }
 
 function activities(input: ItineraryInput, parks: string[]): Activity[] {
@@ -113,11 +117,14 @@ function activities(input: ItineraryInput, parks: string[]): Activity[] {
     if (!parks.includes(x.parkId)) continue;
     const p = prefs.attractions[x.id];
     if (p === "avoid") continue;
-    out.push({ ...x, intensity: x.intensity, priority: p === "must" ? "must" : p === "want" ? "want" : "optional", custom: false });
+    const priority = p === "must" ? "must" : p === "want" ? "want" : "optional";
+    // Evening shows and parades are never added as extras: they need a time you entered.
+    if (x.schedule === "spectacular" && priority === "optional") continue;
+    out.push({ ...x, intensity: x.intensity, priority, custom: false });
   }
   for (const c of prefs.custom) {
     if (!parks.includes(c.parkId)) continue;
-    out.push({ id: c.id, name: c.name, parkId: c.parkId, areaId: c.areaId, durationMin: c.durationMin, intensity: 1, priority: c.priority, custom: true, category: "custom" });
+    out.push({ id: c.id, name: c.name, parkId: c.parkId, areaId: c.areaId, durationMin: c.durationMin, intensity: 1, priority: c.priority, custom: true, category: "custom", schedule: "custom" });
   }
   return out;
 }
@@ -333,6 +340,7 @@ interface DayResult {
 }
 
 function waitFor(pc: PlanContext, a: Activity, date: IsoDate): { min: number; basis: PlannedItem["waitBasis"]; label: { label: string; status: DerivedInfoStatus } | null } {
+  if (a.category === "spectacular") return { min: 30, basis: "none", label: { label: "Arrive ~30 min early for a viewing spot (assumed)", status: "estimated" } };
   if (a.category === "show" || a.category === "walkthrough" || a.custom) return { min: a.category === "show" ? 10 : 0, basis: "none", label: null };
   const entries = pc.input.parkInfo.waits.filter((w) => w.attractionId === a.id && (w.kind === "your_estimate" || w.kind === "predicted"));
   const e = entries.find((w) => w.date === date) ?? entries.find((w) => w.date === null);
@@ -492,7 +500,10 @@ function orderings(acts: Activity[], parkId: string, prefs: Preferences): Orderi
     at = a.areaId;
     nn.push(a);
   }
-  return [nn, sweep(1), sweep(-1)];
+  // Must-dos first (in walking order), then everything else: favours early must-dos when walking allows.
+  const musts = nn.filter((a) => a.priority === "must");
+  const mustFirst = [...musts, ...nn.filter((a) => a.priority !== "must")];
+  return [nn, mustFirst, sweep(1), sweep(-1)];
 }
 
 function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: number; end: number }, order: Ordering, fixed: Fixed[], mealsDone: { lunch: boolean; dinner: boolean }): { items: PlannedItem[]; scheduled: Set<string>; unscheduled: DayPlan["unscheduled"]; missedBreaks: number; lateMeals: number } {
@@ -570,7 +581,10 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
     }
     // Next activity that fits before the next fixed item and the day's end.
     let picked = -1;
-    let plan: { travel: number; begin: number; wait: ReturnType<typeof waitFor> } | null = null;
+    type Plan = { travel: number; begin: number; wait: ReturnType<typeof waitFor> };
+    let plan: Plan | null = null;
+    // An item that can only start much later (its window opens later) is deferred while something else fits now.
+    let deferred = null as { i: number; plan: Plan } | null;
     for (let i = 0; i < queue.length; i++) {
       const a = queue[i]!;
       if (a.priority === "optional" && activityMin >= target) continue;
@@ -578,7 +592,9 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
       const open = attractionOpen(pc, a, date);
       const wait = waitFor(pc, a, date);
       let begin = t + travel;
-      if (open.window) begin = Math.max(begin, open.window[0]);
+      // A performance's entered time is when it starts: arriving early happens before it. Rides queue inside their window.
+      const performance = a.schedule === "showtimes" || a.schedule === "spectacular";
+      if (open.window) begin = Math.max(begin, open.window[0] - (performance ? wait.min : 0));
       const end = begin + wait.min + a.durationMin;
       if (open.window && end > open.window[1]) continue;
       if (end > win.end) continue;
@@ -586,9 +602,17 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
       // Don't let a meal window pass entirely while riding.
       const lateMeal = meals.find((m) => t < toMin(prefs[m]!.start) && end > toMin(prefs[m]!.end));
       if (lateMeal) continue;
+      if (begin - (t + travel) > 20) {
+        if (!deferred || begin < deferred.plan.begin) deferred = { i, plan: { travel, begin, wait } };
+        continue;
+      }
       picked = i;
       plan = { travel, begin, wait };
       break;
+    }
+    if (picked < 0 && deferred && (!nf || deferred.plan.begin < nf.start)) {
+      picked = deferred.i;
+      plan = deferred.plan;
     }
     if (picked >= 0 && plan) {
       const a = queue.splice(picked, 1)[0]!;
@@ -614,7 +638,9 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
         priority: a.priority,
         basis: [
           ...(plan.wait.label ? [plan.wait.label] : []),
-          ...(a.category === "show" && !attractionOpen(pc, a, date).window ? [{ label: "Show times unknown: check the schedule", status: "unavailable" as const }] : []),
+          ...(a.schedule === "showtimes" && !attractionOpen(pc, a, date).window ? [{ label: "Performance times unknown: check the schedule", status: "unavailable" as const }] : []),
+          ...(a.minHeightIn && pc.input.context.party.children > 0 ? [{ label: `Reported minimum height ${a.minHeightIn} in (verify)`, status: "estimated" as const }] : []),
+          ...(attractionById.get(a.id) ? advisoriesFor(attractionById.get(a.id)!, date, date).map((x) => ({ label: `Reported: ${x.text} (verify)`, status: "unavailable" as const })) : []),
           a.custom ? { label: "Your activity", status: "manual" as const } : { label: `~${a.durationMin} min (catalog estimate)`, status: "estimated" as const },
         ],
         notes: area ? [] : ["Location unknown"],
@@ -653,7 +679,14 @@ function simulate(pc: PlanContext, date: IsoDate, parkId: string, win: { start: 
   for (const a of queue) {
     if (a.priority === "optional") continue;
     const open = attractionOpen(pc, a, date);
-    unscheduled.push({ id: a.id, name: a.name, reason: open.window ? `didn't fit within its known operating window and the day's plan` : "didn't fit in the day" });
+    const need = waitFor(pc, a, date).min + a.durationMin;
+    unscheduled.push({
+      id: a.id,
+      name: a.name,
+      reason: open.window
+        ? `didn't fit within its known operating window (${fmtTime(open.window[0])}–${fmtTime(open.window[1])}) alongside the day's other plans`
+        : `didn't fit in the day: it needs about ${need} min (wait + experience) and the day ran out of time after ${a.priority === "must" ? "other must-dos, " : ""}meals, breaks and reservations`,
+    });
   }
   items.sort((a, b) => a.start - b.start);
   for (const m of skippedMeals) {
@@ -686,7 +719,9 @@ function dayScore(pc: PlanContext, r: ReturnType<typeof simulate>, win: { start:
   const util = (walk + activity) / Math.max(1, win.end - win.start);
   const target = PACE[pc.input.prefs.pace].target;
   const w = pc.input.prefs.priorities;
-  return must * 100 + want * 30 + opt * (w.maximizeAttractions ? 8 : 4) - walk * (w.minimizeWalking ? 1.5 : 0.6) - bt * (w.reduceBacktracking ? 25 : 10) - Math.max(0, util - target) * 200 - r.missedBreaks * 20 - r.lateMeals * 15;
+  // Must-dos earlier in the day leave room for the unexpected (waits, weather); weighed against walking, not forced.
+  const mustLateHours = r.items.filter((i) => i.priority === "must" && i.kind !== "lightning_lane" && !attractionOpen(pc, { id: i.attractionId ?? "" } as Activity, "").window).reduce((t, i) => t + Math.max(0, i.start - win.start) / 60, 0);
+  return must * 100 + want * 30 + opt * (w.maximizeAttractions ? 8 : 4) - walk * (w.minimizeWalking ? 1.5 : 0.6) - bt * (w.reduceBacktracking ? 25 : 10) - Math.max(0, util - target) * 200 - r.missedBreaks * 20 - r.lateMeals * 15 - mustLateHours * MUST_LATENESS_PER_HOUR;
 }
 
 function scheduleDay(pc: PlanContext, date: IsoDate, slot: Slot, pool: Map<string, Activity[]>): DayResult {
@@ -732,6 +767,10 @@ function scheduleDay(pc: PlanContext, date: IsoDate, slot: Slot, pool: Map<strin
         if (a.priority !== "optional") unscheduled.push({ id: a.id, name: a.name, reason: open.closed });
         continue;
       }
+      if (a.schedule === "spectacular" && !open.window) {
+        unscheduled.push({ id: a.id, name: a.name, reason: "its showtime isn't known: add it under “What you already know → Show and attraction times” to plan it" });
+        continue;
+      }
       if (dayFixed.fixed.some((f) => f.item.attractionId === a.id)) continue;
       usable.push(a);
     }
@@ -750,6 +789,20 @@ function scheduleDay(pc: PlanContext, date: IsoDate, slot: Slot, pool: Map<strin
       }
     }
     const r = best ?? simulate(pc, date, h.parkId, h, [], fixed, { ...mealsDone });
+    // Say why a must-do ended up late in the day (no silent deprioritisation).
+    const mustsInOrder = r.items.filter((i) => i.priority === "must");
+    mustsInOrder.forEach((i, k) => {
+      if (i.start - h.start < 180 || i.kind === "lightning_lane") return;
+      const win = i.attractionId ? attractionOpen(pc, { id: i.attractionId } as Activity, date).window : null;
+      const area = i.areaId ? areaOf(h.parkId, i.areaId)?.name : undefined;
+      i.notes.push(
+        win && win[0] >= i.start - 30
+          ? `Planned for ${fmtTime(i.start)}: its operating window starts at ${fmtTime(win[0])}.`
+          : k >= 2
+            ? `Planned later in the day: ${k} other must-dos come first, and the planner weighs earlier must-dos against extra walking.`
+            : `Planned later in the day to group it with nearby attractions${area ? ` in ${area}` : ""} and limit walking. Fix the order by making it a Lightning Lane window or a reservation if you need it earlier.`,
+      );
+    });
     for (const i of r.items) if (i.kind === "meal") mealsDone[i.title === "Lunch" ? "lunch" : "dinner"] = true;
     allItems.push(...r.items);
     r.scheduled.forEach((id) => scheduled.add(id));
@@ -869,7 +922,8 @@ export function verifyItinerary(input: ItineraryInput, it: Pick<Itinerary, "days
         const closed = input.parkInfo.closures.find((c) => c.attractionId === i.attractionId && c.from <= d.date && d.date <= c.to);
         if (closed) errors.push(`${d.date}: "${i.title}" is closed that day.`);
         const h = input.parkInfo.attractionHours.find((x) => x.attractionId === i.attractionId && (x.date === d.date || x.date === null));
-        if (h && i.kind === "attraction" && (i.start < toMin(h.start) || i.end > toMin(h.end))) errors.push(`${d.date}: "${i.title}" is outside its operating window.`);
+        const performance = ["showtimes", "spectacular"].includes(attractionById.get(i.attractionId)?.schedule ?? "");
+        if (h && i.kind === "attraction" && (i.start + (performance ? i.waitMin : 0) < toMin(h.start) || i.end > toMin(h.end))) errors.push(`${d.date}: "${i.title}" is outside its operating window.`);
         if (!d.parkIds.includes(attractionById.get(i.attractionId)?.parkId ?? "")) errors.push(`${d.date}: "${i.title}" is not in the park planned for that day.`);
       }
     }
@@ -1139,6 +1193,19 @@ function buildFromAllocation(pc: PlanContext, slots: Slot[], pool0: Activity[]):
   const observed = input.parkInfo.waits.filter((w) => w.kind === "observed");
   if (observed.length) assumptions.push(`${observed.length} observed wait time${observed.length === 1 ? " is" : "s are"} shown for reference only: a past observation is not a forecast.`);
   if (!input.parkInfo.closures.length) unknowns.push("No closures are entered; refurbishments are not known to the planner.");
+  // Reported (unconfirmed) changes for attractions you chose: shown, never applied.
+  const chosen = new Set([...done, ...Object.entries(prefs.attractions).filter(([, p]) => p !== "avoid").map(([id]) => id)]);
+  for (const id of chosen) {
+    const x = attractionById.get(id);
+    if (!x) continue;
+    for (const adv of advisoriesFor(x, input.context.arrival, input.context.departure)) {
+      unknowns.push(`${x.name}: ${adv.text} (${adv.source}, checked ${adv.checkedAt}). Not applied — if it's confirmed for your dates, add it as a closure under “What you already know”.`);
+    }
+  }
+  if (input.context.party.children > 0) {
+    const tall = [...done].map((id) => attractionById.get(id)).filter((x) => x?.minHeightIn);
+    if (tall.length) assumptions.push(`${tall.length} planned attraction${tall.length === 1 ? " has" : "s have"} a reported minimum height (third-party guides; verify with Disney). Children's heights aren't known to the planner.`);
+  }
 
   // Data provenance summary.
   const st = (p: InfoProvenance) => effectiveStatus(p, pc.today, pc.staleAfterDays);
@@ -1201,12 +1268,162 @@ export const STANDARD_VARIANTS: Variant[] = [
   },
 ];
 
-export function compareVariants(input: ItineraryInput, variants: Variant[], opts: PlanOptions): { label: string; differs: string[]; itinerary: Itinerary }[] {
-  return variants.map((v) => ({
-    label: v.label,
-    differs: v.differs,
-    itinerary: planItinerary({ ...input, prefs: { ...input.prefs, ...v.prefs, priorities: { ...input.prefs.priorities, ...(v.prefs.priorities ?? {}) } } }, opts),
-  }));
+export function compareVariants(input: ItineraryInput, variants: Variant[], opts: PlanOptions): { label: string; differs: string[]; input: ItineraryInput; itinerary: Itinerary }[] {
+  return variants.map((v) => {
+    const vInput = { ...input, prefs: { ...input.prefs, ...v.prefs, priorities: { ...input.prefs.priorities, ...(v.prefs.priorities ?? {}) } } };
+    return { label: v.label, differs: v.differs, input: vInput, itinerary: planItinerary(vInput, opts) };
+  });
+}
+
+// ───────────────────────────── Comparison ─────────────────────────────
+
+export interface ComparisonSide {
+  label: string;
+  input: ItineraryInput;
+  itinerary: Itinerary;
+}
+
+export interface ItineraryComparison {
+  /** Both plans use the same trip and park information (preferences may differ). */
+  sameFacts: boolean;
+  factDifferences: string[];
+  preferenceDifferences: string[];
+  rows: { label: string; a: string; b: string }[];
+  scores: { label: string; a: number; b: number; weightA: number; weightB: number }[];
+  /** Totals are only directly comparable when both use the same component weights. */
+  scoresComparable: boolean;
+  tradeoffs: string[];
+}
+
+interface Metrics {
+  must: string;
+  activities: number;
+  walking: number;
+  waitEstimated: number;
+  waitAssumed: number;
+  meals: number;
+  breaks: number;
+  free: number;
+  unplanned: number;
+  earliest: number | null;
+  latest: number | null;
+  parkDays: number;
+}
+
+function metrics(it: Itinerary): Metrics {
+  const days = it.days.filter((d) => d.kind === "park" || d.kind === "hop");
+  const all = days.flatMap((d) => d.items);
+  const sum = (f: (i: PlannedItem) => boolean, v: (i: PlannedItem) => number) => all.filter(f).reduce((t, i) => t + v(i), 0);
+  const rides = (i: PlannedItem) => i.kind === "attraction" || i.kind === "lightning_lane" || i.kind === "custom";
+  return {
+    must: `${it.coverage.must.scheduled} of ${it.coverage.must.total}`,
+    activities: all.filter(rides).length,
+    walking: days.reduce((t, d) => t + d.walkingMin, 0) + sum((i) => i.kind === "transfer", (i) => i.end - i.start),
+    waitEstimated: sum((i) => rides(i) && (i.waitBasis === "your_estimate" || i.waitBasis === "predicted"), (i) => i.waitMin),
+    waitAssumed: sum((i) => rides(i) && (i.waitBasis === "assumed_buffer" || i.waitBasis === "lightning_lane"), (i) => i.waitMin),
+    meals: sum((i) => i.kind === "meal" || i.kind === "dining", (i) => i.end - i.start),
+    breaks: sum((i) => i.kind === "break", (i) => i.end - i.start),
+    free: sum((i) => i.kind === "flexible", (i) => i.end - i.start),
+    unplanned: days.reduce((t, d) => t + Math.max(0, d.window.end - (d.items.length ? Math.max(...d.items.map((i) => i.end)) : d.window.start)), 0),
+    earliest: days.length ? Math.min(...days.map((d) => (d.items.length ? d.items[0]!.start - d.items[0]!.travelMin : d.window.start))) : null,
+    latest: days.length ? Math.max(...days.map((d) => (d.items.length ? Math.max(...d.items.map((i) => i.end)) : d.window.start))) : null,
+    parkDays: days.length,
+  };
+}
+
+function preferenceDiff(a: Preferences, b: Preferences): string[] {
+  const out: string[] = [];
+  const yn = (x: boolean) => (x ? "on" : "off");
+  if (a.pace !== b.pace) out.push(`Pace: ${a.pace} vs ${b.pace}`);
+  for (const [k, label] of [
+    ["minimizeWalking", "Minimize walking"],
+    ["reduceBacktracking", "Avoid crossing the park"],
+    ["maximizeAttractions", "Fit in as much as possible"],
+    ["relaxedSchedule", "Keep it relaxed"],
+  ] as const)
+    if (a.priorities[k] !== b.priorities[k]) out.push(`${label}: ${yn(a.priorities[k])} vs ${yn(b.priorities[k])}`);
+  for (const [k, label] of [
+    ["middayBreak", "Midday rest"],
+    ["flexibleAfternoons", "Free afternoons"],
+    ["allowHopping", "Park hopping"],
+  ] as const)
+    if (a[k] !== b[k]) out.push(`${label}: ${yn(a[k])} vs ${yn(b[k])}`);
+  if ((a.maxParkDays ?? 0) !== (b.maxParkDays ?? 0)) out.push(`Park days used: ${a.maxParkDays ?? "all"} vs ${b.maxParkDays ?? "all"}`);
+  if (a.dayStart !== b.dayStart || a.dayEnd !== b.dayEnd) out.push(`Day window: ${a.dayStart}–${a.dayEnd} vs ${b.dayStart}–${b.dayEnd}`);
+  if (a.waitBufferMin !== b.waitBufferMin) out.push(`Wait buffer: ${a.waitBufferMin} vs ${b.waitBufferMin} min`);
+  if (stableHash(a.attractions) !== stableHash(b.attractions) || stableHash(a.custom) !== stableHash(b.custom)) out.push("Attraction choices differ");
+  return out;
+}
+
+export function compareItineraries(A: ComparisonSide, B: ComparisonSide): ItineraryComparison {
+  const ma = metrics(A.itinerary);
+  const mb = metrics(B.itinerary);
+  const factDifferences: string[] = [];
+  if (stableHash(A.input.context) !== stableHash(B.input.context)) factDifferences.push("The two plans are for different trip details (dates, resort, party or tickets).");
+  if (stableHash(A.input.parkInfo) !== stableHash(B.input.parkInfo)) factDifferences.push("The two plans use different park information (hours, reservations, closures or wait estimates).");
+  if (A.input.demo !== B.input.demo) factDifferences.push("One plan is a demonstration with illustrative data.");
+  if (A.itinerary.engineVersion !== B.itinerary.engineVersion) factDifferences.push(`The plans were made by different planner versions (${A.itinerary.engineVersion} vs ${B.itinerary.engineVersion}).`);
+  const t = (m: number | null) => (m === null ? "—" : fmtTime(m));
+  const status = (it: Itinerary) => `${it.status === "feasible" ? "All hard constraints met" : it.status === "partial" ? "Some must-dos left out" : "Not feasible"}${it.provisional ? " (provisional)" : ""}`;
+  const rows = [
+    { label: "Feasibility", a: status(A.itinerary), b: status(B.itinerary) },
+    { label: "Must-dos scheduled", a: ma.must, b: mb.must },
+    { label: "Park days", a: String(ma.parkDays), b: String(mb.parkDays) },
+    { label: "Attractions and activities", a: String(ma.activities), b: String(mb.activities) },
+    { label: "Walking and transfers (estimated)", a: `${ma.walking} min`, b: `${mb.walking} min` },
+    { label: "Waiting from your estimates", a: `${ma.waitEstimated} min`, b: `${mb.waitEstimated} min` },
+    { label: "Waiting assumed (buffer, unknown real waits)", a: `${ma.waitAssumed} min`, b: `${mb.waitAssumed} min` },
+    { label: "Meals", a: `${ma.meals} min`, b: `${mb.meals} min` },
+    { label: "Breaks", a: `${ma.breaks} min`, b: `${mb.breaks} min` },
+    { label: "Free time within the plan", a: `${ma.free} min`, b: `${mb.free} min` },
+    { label: "Unplanned time at day ends", a: `${ma.unplanned} min`, b: `${mb.unplanned} min` },
+    { label: "Earliest start", a: t(ma.earliest), b: t(mb.earliest) },
+    { label: "Latest finish", a: t(ma.latest), b: t(mb.latest) },
+    { label: "Conflicts", a: String(A.itinerary.conflicts.length), b: String(B.itinerary.conflicts.length) },
+    { label: "Unknowns noted", a: String(A.itinerary.unknowns.length), b: String(B.itinerary.unknowns.length) },
+  ];
+  const sa = A.itinerary.score;
+  const sb = B.itinerary.score;
+  const scores =
+    sa && sb
+      ? sa.components.map((c) => {
+          const o = sb.components.find((x) => x.key === c.key)!;
+          return { label: c.label, a: c.score, b: o.score, weightA: c.weightPct, weightB: o.weightPct };
+        })
+      : [];
+  const scoresComparable = !!sa && !!sb && scores.every((x) => x.weightA === x.weightB) && factDifferences.length === 0;
+
+  const tradeoffs: string[] = [];
+  const more = ma.activities === mb.activities ? null : ma.activities > mb.activities ? [A, B, ma, mb] as const : [B, A, mb, ma] as const;
+  if (more) {
+    const [X, Y, mx, my] = more;
+    const restX = mx.breaks + mx.free + mx.unplanned;
+    const restY = my.breaks + my.free + my.unplanned;
+    tradeoffs.push(
+      `“${X.label}” fits ${mx.activities - my.activities} more attraction${mx.activities - my.activities === 1 ? "" : "s"} than “${Y.label}”` +
+        (restY > restX ? `, at the cost of ${restY - restX} fewer minutes of breaks and free time` : "") +
+        (mx.walking > my.walking ? ` and ${mx.walking - my.walking} more minutes of walking` : "") +
+        (mx.latest !== null && my.latest !== null && mx.latest > my.latest ? `, finishing as late as ${fmtTime(mx.latest)} (vs ${fmtTime(my.latest)})` : "") +
+        ". More activities isn't automatically better: it depends on how much rest your group needs.",
+    );
+  }
+  if (A.itinerary.coverage.must.scheduled !== B.itinerary.coverage.must.scheduled) {
+    const [X, Y] = A.itinerary.coverage.must.scheduled > B.itinerary.coverage.must.scheduled ? [A, B] : [B, A];
+    tradeoffs.push(`Only “${X.label}” fits all the must-dos it could (${X.itinerary.coverage.must.scheduled} vs ${Y.itinerary.coverage.must.scheduled}); see “Must-dos not scheduled” in “${Y.label}”.`);
+  }
+  if (ma.waitAssumed + mb.waitAssumed > 0) tradeoffs.push("Much of the waiting in both plans is an assumed buffer, not a forecast: real waits can change either plan.");
+  if (!scoresComparable && sa && sb) {
+    tradeoffs.push(
+      factDifferences.length
+        ? "The plans don't use the same facts, so their scores can't be compared directly."
+        : "Each plan's score weighs the components by its own priorities, so compare the rows above rather than the two totals.",
+    );
+  }
+  const onlyA = A.itinerary.assumptions.filter((x) => !B.itinerary.assumptions.includes(x));
+  const onlyB = B.itinerary.assumptions.filter((x) => !A.itinerary.assumptions.includes(x));
+  for (const x of onlyA) tradeoffs.push(`Assumption only in “${A.label}”: ${x}`);
+  for (const x of onlyB) tradeoffs.push(`Assumption only in “${B.label}”: ${x}`);
+  return { sameFacts: factDifferences.length === 0, factDifferences, preferenceDifferences: preferenceDiff(A.input.prefs, B.input.prefs), rows, scores, scoresComparable, tradeoffs };
 }
 
 /** Facts for comparing two itineraries built from the same inputs. */

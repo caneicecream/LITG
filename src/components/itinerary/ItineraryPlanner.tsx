@@ -4,11 +4,12 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ItinerarySummary, SavedItinerary, SavedTrip } from "@/data/store";
 import { addDays, daysBetween, formatDate, formatShortDate, todayIso, type IsoDate } from "@/domain/dates";
-import { ATTRACTIONS, CATALOG_PROVENANCE, CATEGORY_LABEL, parkById, PARKS } from "@/itinerary/catalog";
-import { ITINERARY_ENGINE_VERSION, STANDARD_VARIANTS } from "@/itinerary/engine";
+import { advisoriesFor, ATTRACTIONS, CATALOG_PROVENANCE, CATEGORY_LABEL, parkById, PARKS, SCHEDULE_LABEL } from "@/itinerary/catalog";
+import { ITINERARY_ENGINE_VERSION, STANDARD_VARIANTS, type ItineraryComparison } from "@/itinerary/engine";
+import { contextDifferences } from "@/itinerary/context";
 import { defaultPreferences, emptyParkInfo, type AttractionPref, type Itinerary, type ItineraryInput, type Preferences, type TripContext } from "@/itinerary/types";
 import { CompareView, ItineraryView, StatusBadges } from "./ItineraryView";
-import { KnownInfoEditor } from "./KnownInfoEditor";
+import { KnownInfoEditor, type KnownInfoSection } from "./KnownInfoEditor";
 
 const DRAFT_KEY = "dvo:itinerary-draft";
 const PLANNER_DRAFT_KEY = "dvo:draft-request";
@@ -17,6 +18,7 @@ const TICKET_LABEL = { base: "1 park per day", park_hopper: "Park Hopper", park_
 interface Comparison {
   variants: { label: string; differs: string[]; itinerary: Itinerary }[];
   summary: string[];
+  details?: ItineraryComparison;
 }
 
 async function json<T>(res: Response): Promise<T> {
@@ -86,6 +88,30 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
       /* storage unavailable */
     }
   }, [input, tripId, savedId]);
+
+  // Has the linked saved trip changed since this itinerary was planned? Never applied silently.
+  const [drift, setDrift] = useState<{ current: TripContext | null; differences: string[]; missing: boolean } | null>(null);
+  useEffect(() => {
+    if (!tripId || !input || input.demo) {
+      setDrift(null);
+      return;
+    }
+    let live = true;
+    fetch(`/api/itinerary/context?tripId=${encodeURIComponent(tripId)}`)
+      .then(async (r) => {
+        const b = await r.json().catch(() => ({}));
+        if (!live) return;
+        if (r.status === 404) setDrift({ current: null, differences: [], missing: true });
+        else if (r.ok) setDrift({ current: b.context, differences: contextDifferences(input.context, b.context), missing: false });
+        else setDrift({ current: null, differences: [b.errors?.join(" ") ?? "The saved trip can't be read right now."], missing: false });
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+    // Only re-check when the linked trip or the planned trip changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tripId, input?.context.arrival, input?.context.departure, input?.context.resortId, JSON.stringify(input?.context.ticket)]);
 
   const start = (context: TripContext, opts: { demo?: ItineraryInput; tripId?: string | null } = {}) => {
     setInput(opts.demo ?? { context, prefs: defaultPreferences(), parkInfo: emptyParkInfo(), demo: false });
@@ -160,6 +186,17 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
     }
   };
 
+  // Missing information in a plan links straight to the form that fills it in.
+  const [knownSection, setKnownSection] = useState<KnownInfoSection>("hours");
+  const openKnown = (section: string) => {
+    setKnownSection(section as KnownInfoSection);
+    const el = document.getElementById("known-info") as HTMLDetailsElement | null;
+    if (el) {
+      el.open = true;
+      el.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  };
+
   const update = (fn: (i: ItineraryInput) => ItineraryInput) => setInput((i) => (i ? fn(i) : i));
   const setPrefs = (p: Partial<Preferences>) => update((i) => ({ ...i, prefs: { ...i.prefs, ...p } }));
 
@@ -191,6 +228,36 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
       {error && <div className="banner banner-error">{error}</div>}
       {notice && <div className="banner banner-info small">{notice}</div>}
 
+      {drift?.missing && (
+        <div className="banner banner-warn small">
+          <div>The saved trip this itinerary was planned for no longer exists. The itinerary keeps its own copy of the trip details shown below.</div>
+        </div>
+      )}
+      {drift && drift.differences.length > 0 && (
+        <div className="banner banner-warn small" data-testid="trip-drift">
+          <div className="stack" style={{ gap: 6 }}>
+            <strong>The saved trip has changed since this itinerary was planned:</strong>
+            <ul className="notices">
+              {drift.differences.map((d) => (
+                <li key={d}>{d}</li>
+              ))}
+            </ul>
+            <div>This plan still uses the details below. Nothing changes unless you choose to.</div>
+            {drift.current && (
+              <div>
+                <button
+                  onClick={() => {
+                    update((i) => ({ ...i, context: drift.current! }));
+                    setNotice("Now using the current trip details. Plan again (and save as a new version) to update the itinerary; the earlier version is kept.");
+                  }}
+                >
+                  Use the current trip details
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
       <TripCard ctx={input.context} />
 
       <Step n={1} title="Parks">
@@ -202,11 +269,11 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
       <Step n={3} title="Pace and preferences">
         <PaceStep prefs={input.prefs} hopper={!!input.context.ticket?.hopper} setPrefs={setPrefs} />
       </Step>
-      <Step n={4} title="What you already know (optional)" collapsed>
+      <Step n={4} title="What you already know (optional)" collapsed id="known-info">
         <p className="small muted">
           The app has no live park information: no official hours, closures, waits, crowd levels, reservation or Lightning Lane availability. Add what you know; anything missing is shown as unknown and the plan says what it assumed.
         </p>
-        <KnownInfoEditor info={input.parkInfo} onChange={(parkInfo) => update((i) => ({ ...i, parkInfo }))} dates={tripDateList(input.context)} parks={input.prefs.parks} today={todayIso()} />
+        <KnownInfoEditor info={input.parkInfo} onChange={(parkInfo) => update((i) => ({ ...i, parkInfo }))} dates={tripDateList(input.context)} parks={input.prefs.parks} today={todayIso()} section={knownSection} onSection={setKnownSection} />
       </Step>
 
       <div className="card card-pad row" style={{ position: "sticky", bottom: 8, zIndex: 5 }}>
@@ -268,6 +335,7 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
         <CompareView
           variants={comparison.variants}
           summary={comparison.summary}
+          details={comparison.details}
           onUse={(label) => {
             const v = STANDARD_VARIANTS.find((x) => x.label === label)!;
             setPrefs({ ...v.prefs, priorities: { ...input.prefs.priorities, ...(v.prefs.priorities ?? {}) } });
@@ -276,7 +344,7 @@ export function ItineraryPlanner({ savedId }: { savedId?: string }) {
           }}
         />
       )}
-      {shown && !(comparison && viewVersion === null) && <ItineraryView it={shown} />}
+      {shown && !(comparison && viewVersion === null) && <ItineraryView it={shown} onAction={viewVersion === null ? openKnown : undefined} />}
     </div>
   );
 }
@@ -285,9 +353,9 @@ function tripDateList(ctx: TripContext): IsoDate[] {
   return Array.from({ length: Math.min(daysBetween(ctx.arrival, ctx.departure), 20) + 1 }, (_, i) => addDays(ctx.arrival, i));
 }
 
-function Step({ n, title, children, collapsed = false }: { n: number; title: string; children: React.ReactNode; collapsed?: boolean }) {
+function Step({ n, title, children, collapsed = false, id }: { n: number; title: string; children: React.ReactNode; collapsed?: boolean; id?: string }) {
   return (
-    <details className="card card-pad" open={!collapsed}>
+    <details className="card card-pad" open={!collapsed} id={id}>
       <summary style={{ cursor: "pointer" }}>
         <h2 style={{ display: "inline" }}>
           {n}. {title}
@@ -424,8 +492,15 @@ function AttractionsStep({ input, setPrefs }: { input: ItineraryInput; setPrefs:
                     <td>
                       {a.name}
                       <div className="small muted">
-                        {p.areas.find((x) => x.id === a.areaId)?.name} · {CATEGORY_LABEL[a.category]} · ~{a.durationMin} min
+                        {p.areas.find((x) => x.id === a.areaId)?.name} · {CATEGORY_LABEL[a.category]} · ~{a.durationMin} min (estimate)
+                        {a.schedule !== "continuous" ? ` · ${SCHEDULE_LABEL[a.schedule]}` : ""}
+                        {a.minHeightIn ? ` · reported min. height ${a.minHeightIn} in (verify)` : ""}
                       </div>
+                      {advisoriesFor(a, input.context.arrival, input.context.departure).map((x) => (
+                        <div key={x.text} className="small save-neg">
+                          Reported: {x.text} ({x.source}, checked {x.checkedAt}). Verify; add a closure if confirmed.
+                        </div>
+                      ))}
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       {(["must", "want", "", "avoid"] as const).map((v) => (
@@ -629,6 +704,24 @@ function StartChooser({ onStart, error }: { onStart: (ctx: TripContext, opts?: {
       setBusy(false);
     }
   };
+  // Arriving from "Plan the park days for this option" or a saved trip's "Plan the park days".
+  useEffect(() => {
+    const q = new URLSearchParams(location.search);
+    const tripParam = q.get("trip");
+    if (tripParam) {
+      go(fetch(`/api/itinerary/context?tripId=${encodeURIComponent(tripParam)}`), { tripId: tripParam });
+      return;
+    }
+    if (q.get("option")) {
+      try {
+        const o = JSON.parse(localStorage.getItem("dvo:itinerary-option") ?? "null");
+        if (o?.request && o.option) go(fetch("/api/itinerary/context", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ request: o.request, option: o.option }) }));
+      } catch {
+        /* nothing to start from */
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const draft = useMemo(() => {
     try {
       return JSON.parse(localStorage.getItem(PLANNER_DRAFT_KEY) ?? "null");
@@ -695,6 +788,11 @@ function StartChooser({ onStart, error }: { onStart: (ctx: TripContext, opts?: {
               <span className="small muted">
                 {x.versionCount} version{x.versionCount === 1 ? "" : "s"} · updated {new Date(x.updatedAt).toLocaleString()}
               </span>
+              {x.trip && (
+                <span className="small muted">
+                  · {x.trip.label}: {x.trip.arrival} → {x.trip.departure}
+                </span>
+              )}
               {x.latest && <span className="small">{x.latest.headline}</span>}
               <span className="spacer" />
               <button

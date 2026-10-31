@@ -2,7 +2,7 @@
 
 import { formatDate } from "@/domain/dates";
 import { parkById } from "@/itinerary/catalog";
-import { fmtTime } from "@/itinerary/engine";
+import { fmtTime, type ItineraryComparison } from "@/itinerary/engine";
 import { INFO_STATUS_LABEL, type DayPlan, type DerivedInfoStatus, type Itinerary, type PlannedItem } from "@/itinerary/types";
 
 const INFO_HELP: Record<DerivedInfoStatus, string> = {
@@ -49,7 +49,30 @@ export function StatusBadges({ it }: { it: Itinerary }) {
   );
 }
 
-export function ItineraryView({ it, compact = false }: { it: Itinerary; compact?: boolean }) {
+/** Which manual-entry section resolves a piece of missing information (null = nothing to enter). */
+export function actionFor(text: string): { section: string; label: string } | null {
+  if (/^Park hours are not entered|stale/.test(text)) return { section: "hours", label: "Add park hours" };
+  if (/showtime isn't known|Performance times/.test(text)) return { section: "attractionHours", label: "Add the time" };
+  if (/Lightning Lane availability/.test(text)) return { section: "lightningLane", label: "Add a return window you hold" };
+  if (/No closures are entered|Not applied — if it's confirmed/.test(text)) return { section: "closures", label: "Add a closure" };
+  if (/^Waits are unknown/.test(text)) return { section: "waits", label: "Add wait estimates" };
+  if (/Needs a park reservation/.test(text)) return { section: "parkReservations", label: "Add a park reservation" };
+  return null;
+}
+
+function Act({ text, onAction }: { text: string; onAction?: (section: string) => void }) {
+  const a = onAction ? actionFor(text) : null;
+  return a ? (
+    <>
+      {" "}
+      <button type="button" className="link small" onClick={() => onAction!(a.section)}>
+        {a.label}
+      </button>
+    </>
+  ) : null;
+}
+
+export function ItineraryView({ it, compact = false, onAction }: { it: Itinerary; compact?: boolean; onAction?: (section: string) => void }) {
   return (
     <div className="stack" style={{ gap: 12 }}>
       {it.demo && (
@@ -94,6 +117,7 @@ export function ItineraryView({ it, compact = false }: { it: Itinerary; compact?
             {it.coverage.must.missing.map((m) => (
               <li key={m.id}>
                 <strong>{m.name}</strong>: {m.reason}
+                <Act text={m.reason} onAction={onAction} />
               </li>
             ))}
           </ul>
@@ -101,7 +125,7 @@ export function ItineraryView({ it, compact = false }: { it: Itinerary; compact?
       )}
 
       {it.days.map((d) => (
-        <DayCard key={d.date} d={d} />
+        <DayCard key={d.date} d={d} onAction={onAction} />
       ))}
 
       {!compact && (
@@ -110,11 +134,15 @@ export function ItineraryView({ it, compact = false }: { it: Itinerary; compact?
             <h3>Unknowns and assumptions</h3>
             <ul className="notices small">
               {it.unknowns.map((u) => (
-                <li key={u}>{u}</li>
+                <li key={u}>
+                  {u}
+                  <Act text={u} onAction={onAction} />
+                </li>
               ))}
               {it.assumptions.map((u) => (
                 <li key={u} className="muted">
                   {u}
+                  <Act text={u} onAction={onAction} />
                 </li>
               ))}
             </ul>
@@ -191,7 +219,7 @@ function ScoreCard({ it }: { it: Itinerary }) {
   );
 }
 
-function DayCard({ d }: { d: DayPlan }) {
+function DayCard({ d, onAction }: { d: DayPlan; onAction?: (section: string) => void }) {
   if (d.kind === "rest" || d.kind === "no_park") {
     return (
       <div className="card card-pad">
@@ -254,7 +282,10 @@ function DayCard({ d }: { d: DayPlan }) {
       {d.notes.length > 0 && (
         <ul className="notices small">
           {d.notes.map((n) => (
-            <li key={n}>{n}</li>
+            <li key={n}>
+              {n}
+              <Act text={n} onAction={onAction} />
+            </li>
           ))}
         </ul>
       )}
@@ -267,20 +298,81 @@ function DayCard({ d }: { d: DayPlan }) {
   );
 }
 
-/** Two candidates from the same facts, side by side. */
-export function CompareView({ variants, summary, onUse }: { variants: { label: string; differs: string[]; itinerary: Itinerary }[]; summary: string[]; onUse?: (label: string) => void }) {
+/** Two candidates side by side, with what differs and what it costs. */
+export function CompareView({
+  variants,
+  summary,
+  details,
+  onUse,
+}: {
+  variants: { label: string; differs: string[]; itinerary: Itinerary }[];
+  summary: string[];
+  details?: ItineraryComparison | null;
+  onUse?: (label: string) => void;
+}) {
+  const [a, b] = variants;
   return (
     <div className="stack" style={{ gap: 12 }}>
-      <div className="card card-pad stack">
+      <div className="card card-pad stack" data-testid="comparison">
         <h3>
-          {variants.map((v) => v.label).join(" vs ")} — same trip, same park information
+          {variants.map((v) => v.label).join(" vs ")}
+          {details ? (details.sameFacts ? " — same trip, same park information" : "") : " — same trip, same park information"}
         </h3>
-        <ul className="notices small">
-          {summary.map((s) => (
-            <li key={s}>{s}</li>
-          ))}
-        </ul>
-        <p className="hint">Only the preferences listed under each plan differ. Scores reflect how each plan fits its own preferences, so compare the facts above rather than the two scores.</p>
+        {details && details.factDifferences.length > 0 && (
+          <div className="banner banner-warn small">
+            <div>
+              <strong>Not a like-for-like comparison:</strong> {details.factDifferences.join(" ")}
+            </div>
+          </div>
+        )}
+        {details && details.preferenceDifferences.length > 0 && <p className="small">Preferences that differ: {details.preferenceDifferences.join(" · ")}</p>}
+        {details && a && b ? (
+          <div className="scroll-x">
+            <table className="cmp">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>{a.label}</th>
+                  <th>{b.label}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {details.rows.map((r) => (
+                  <tr key={r.label}>
+                    <td className="small">{r.label}</td>
+                    <td className="num small">{r.a}</td>
+                    <td className="num small">{r.b}</td>
+                  </tr>
+                ))}
+                {details.scores.map((r) => (
+                  <tr key={r.label}>
+                    <td className="small muted">Score: {r.label}</td>
+                    <td className="num small muted">
+                      {r.a} <span className="hint">(weight {r.weightA}%)</span>
+                    </td>
+                    <td className="num small muted">
+                      {r.b} <span className="hint">(weight {r.weightB}%)</span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <ul className="notices small">
+            {summary.map((s) => (
+              <li key={s}>{s}</li>
+            ))}
+          </ul>
+        )}
+        {details && details.tradeoffs.length > 0 && (
+          <ul className="notices small">
+            {details.tradeoffs.map((t) => (
+              <li key={t}>{t}</li>
+            ))}
+          </ul>
+        )}
+        <p className="hint">Scores measure fit with each plan's own preferences. Use the rows above to decide which trade-off suits your group.</p>
       </div>
       <div className="split">
         {variants.map((v) => (

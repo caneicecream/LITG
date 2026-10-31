@@ -8,7 +8,7 @@ import { StatusChip } from "./ui";
 
 const STATUS_ORDER: PriceStatus[] = ["verified", "manual", "stale", "estimated", "illustrative"];
 
-export function Breakdown({ e }: { e: Evaluation }) {
+export function Breakdown({ e, onPlanDays }: { e: Evaluation; onPlanDays?: (e: Evaluation) => void }) {
   const totalAbs = Object.values(e.statusTotals).reduce((a, b) => a + (b ?? 0), 0) || 1;
   return (
     <div className="breakdown">
@@ -193,6 +193,14 @@ export function Breakdown({ e }: { e: Evaluation }) {
                 <li key={a}>{a}</li>
               ))}
             </ul>
+          </div>
+        )}
+        {onPlanDays && (
+          <div className="row">
+            <button type="button" onClick={() => onPlanDays(e)}>
+              Plan the park days for this option
+            </button>
+            <span className="small muted">Opens the itinerary planner with these dates, this resort and this ticket.</span>
           </div>
         )}
       </div>

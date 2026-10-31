@@ -158,12 +158,12 @@ export function pgBackendFor(db: Db, opts: { now?: () => Date } = {}): StoreBack
     deleteConversation: (id) => run(async () => (await db.query("DELETE FROM conversations WHERE id = $1 RETURNING id", [id])).length > 0),
     listItineraries: () =>
       run(async () => {
-        const rows = await db.query<{ id: string; name: string; trip_id: string | null; created_at: string; updated_at: string; n: number; version: number | null; result: Itinerary | null; engine_version: string | null }>(
+        const rows = await db.query<{ id: string; name: string; trip_id: string | null; created_at: string; updated_at: string; n: number; version: number | null; result: Itinerary | null; engine_version: string | null; context: { source: { label: string }; arrival: string; departure: string } | null }>(
           `SELECT i.id, i.name, i.trip_id, i.created_at, i.updated_at,
                   (SELECT count(*)::int FROM itinerary_versions v WHERE v.itinerary_id = i.id) AS n,
-                  l.version, l.result, l.engine_version
+                  l.version, l.result, l.engine_version, l.context
              FROM itineraries i
-             LEFT JOIN LATERAL (SELECT version, result, engine_version FROM itinerary_versions v WHERE v.itinerary_id = i.id ORDER BY version DESC LIMIT 1) l ON true
+             LEFT JOIN LATERAL (SELECT version, result, engine_version, input->'context' AS context FROM itinerary_versions v WHERE v.itinerary_id = i.id ORDER BY version DESC LIMIT 1) l ON true
             ORDER BY i.updated_at DESC`,
         );
         return rows.map(
@@ -175,6 +175,7 @@ export function pgBackendFor(db: Db, opts: { now?: () => Date } = {}): StoreBack
             updatedAt: r.updated_at,
             versionCount: r.n,
             latest: r.result ? { version: r.version!, headline: r.result.headline, status: r.result.status, demo: r.result.demo, engineVersion: r.engine_version! } : null,
+            trip: r.context ? { label: r.context.source.label, arrival: r.context.arrival, departure: r.context.departure } : null,
           }),
         );
       }),
