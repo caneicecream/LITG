@@ -1,0 +1,41 @@
+{
+  "msrpCents": 89999,
+  "msrpNote": "US list price $899.99, PlayStation Blog, effective 2026-04-02",
+  "nearMsrpPercent": 5,
+  "allowRefurbished": false,
+  "allowUsed": false,
+  "intervalSeconds": 300,
+  "perHostMinSeconds": 15,
+  "realertHours": 12,
+  "sources": [
+    {
+      "id": "bestbuy",
+      "kind": "bestbuy_api",
+      "searches": ["ps5 pro", "playstation 5 pro"]
+    },
+    {
+      "id": "slickdeals",
+      "kind": "deal_feed",
+      "name": "Slickdeals search",
+      "url": "https://slickdeals.net/newsearch.php?q=ps5+pro&searchin=first&rss=1"
+    },
+    {
+      "id": "target",
+      "kind": "product_page",
+      "retailer": "Target",
+      "url": "https://www.target.com/p/playstation-5-pro/-/A-93620188"
+    },
+    {
+      "id": "gamestop",
+      "kind": "product_page",
+      "retailer": "GameStop",
+      "url": "https://www.gamestop.com/consoles-hardware/playstation-5/consoles/products/sony-playstation-5-pro-console/416188.html"
+    },
+    {
+      "id": "pc-richard",
+      "kind": "product_page",
+      "retailer": "P.C. Richard",
+      "url": "https://www.pcrichard.com/sony-playstation-5-pro-console-ps5-white/1000046529.html"
+    }
+  ]
+}

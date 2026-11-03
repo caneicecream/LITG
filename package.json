@@ -1,0 +1,26 @@
+{
+  "name": "ps5-pro-deal-watch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal watcher for PS5 Pro restocks and deals at or under MSRP, with ntfy phone alerts.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/cli.ts watch",
+    "once": "node --env-file-if-exists=.env src/cli.ts once",
+    "test-alert": "node --env-file-if-exists=.env src/cli.ts test-alert",
+    "check-config": "node --env-file-if-exists=.env src/cli.ts check-config",
+    "test": "node --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.12.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  }
+}
